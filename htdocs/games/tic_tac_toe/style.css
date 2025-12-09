@@ -1,0 +1,99 @@
+.ttt-wrapper {
+  max-width: 680px;
+  margin: 20px auto;
+}
+
+.ttt-head h1 {
+  margin-bottom: 4px;
+}
+
+/* opis pod tytułem – jaśniejszy kolor, żeby był czytelny na ciemnym tle */
+.ttt-meta {
+  color: #9ca3af;
+  margin-bottom: 12px;
+}
+
+.ttt-board {
+  position: relative;              /* <<< ważne */
+  display: grid;
+  grid-template-columns: repeat(3, 120px);
+  grid-auto-rows: 120px;
+  gap: 6px;
+}
+
+.ttt-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 72px;
+  border: 2px solid #333;
+  cursor: pointer;
+  user-select: none;
+  background: #fff;
+}
+
+.ttt-cell.disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ttt-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* Zielona linia zwycięstwa */
+.ttt-win-line {
+  position: absolute;
+  background: #0a0;
+  border-radius: 4px;
+  z-index: 10;          /* <<< NA WIERZCHU NAD POLAMI */
+}
+
+/* Wiersze (poziome) */
+.ttt-win-row0,
+.ttt-win-row1,
+.ttt-win-row2 {
+  left: 5%;
+  right: 5%;
+  height: 4px;
+}
+.ttt-win-row0 { top: 16.5%; }
+.ttt-win-row1 { top: 50%; }
+.ttt-win-row2 { top: 83.5%; }
+
+/* Kolumny (pionowe) */
+.ttt-win-col0,
+.ttt-win-col1,
+.ttt-win-col2 {
+  top: 5%;
+  bottom: 5%;
+  width: 4px;
+}
+.ttt-win-col0 { left: 16.5%; }
+.ttt-win-col1 { left: 50%; }
+.ttt-win-col2 { left: 83.5%; }
+
+/* Przekątne */
+.ttt-win-diag0,
+.ttt-win-diag1 {
+  top: 50%;
+  left: 50%;
+  width: 120%;
+  height: 4px;
+  transform-origin: center center;
+}
+.ttt-win-diag0 {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.ttt-win-diag1 {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+/* Zaznaczenie pól zwycięskiej trójki */
+.ttt-cell-win {
+  background: #2e7d32 !important;
+  color: #ffffff !important;
+  font-weight: 700;
+}

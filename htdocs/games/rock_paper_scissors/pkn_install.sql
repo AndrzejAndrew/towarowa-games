@@ -1,0 +1,28 @@
+CREATE TABLE IF NOT EXISTS pkn_games (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(10) NOT NULL,
+  rounds_total INT NOT NULL DEFAULT 1,
+  current_round INT NOT NULL DEFAULT 1,
+  player1_id INT NOT NULL DEFAULT 0,
+  player1_name VARCHAR(100) NOT NULL,
+  player2_id INT NOT NULL DEFAULT 0,
+  player2_name VARCHAR(100) DEFAULT NULL,
+  p1_score INT NOT NULL DEFAULT 0,
+  p2_score INT NOT NULL DEFAULT 0,
+  player1_move VARCHAR(10) DEFAULT NULL,
+  player2_move VARCHAR(10) DEFAULT NULL,
+  winner TINYINT DEFAULT NULL,
+  status ENUM('waiting','playing','finished') NOT NULL DEFAULT 'waiting',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX(code),
+  INDEX(status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS pkn_stats (
+  user_id INT PRIMARY KEY,
+  games_total INT NOT NULL DEFAULT 0,
+  games_won INT NOT NULL DEFAULT 0,
+  games_lost INT NOT NULL DEFAULT 0,
+  games_bot_total INT NOT NULL DEFAULT 0,
+  games_bot_won INT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
