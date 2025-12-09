@@ -3,7 +3,7 @@
 define('DISCORD_RELAY_URL', 'http://pracaniezajac.cba.pl/discord_relay/relay.php');
 
 // Ten sam tajny token co w relay_config.php na CBA
-define('DISCORD_RELAY_SECRET', 'h4slo_Discord_2025_XyZ');
+define('DISCORD_RELAY_SECRET', 'RELAY_SECRET_HERE');
 
 // Mapowanie typów – to są stringi, które trafiają do relay.php
 $DISCORD = [
