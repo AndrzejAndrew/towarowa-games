@@ -6,33 +6,28 @@ require_once __DIR__ . '/includes/header.php';
 /**
  * GLOBALNY LEADERBOARD
  *
- * Założenia:
- *  - Ranking globalny XP / level – tabela user_levels
- *  - Najbardziej aktywni gracze (wszystkie gry) – tabela game_results
- *  - Skrócony ranking quizu – players + games (jak w games/quiz/ranking.php)
- *
- * Jeśli nazwy tabel/kolumn są inne – dostosuj zapytania pod swój schemat.
+ * Sekcje:
+ *  1. Ranking level / XP (user_levels)
+ *  2. Najbardziej aktywni gracze (game_results)
+ *  3. Skrócony ranking quizu (players + games)
  */
 
 // ---------------------------
 // 1. Ranking level / XP
 // ---------------------------
+$xpRows = [];
 $xpSql = "
     SELECT 
-        u.id         AS user_id,
-        u.username   AS username,
-        ul.level     AS level,
-        ul.xp        AS xp
+        u.id       AS user_id,
+        u.username AS username,
+        ul.level   AS level,
+        ul.xp      AS xp
     FROM user_levels ul
     JOIN users u ON u.id = ul.user_id
     ORDER BY ul.level DESC, ul.xp DESC
     LIMIT 10
 ";
-
-$xpResult = mysqli_query($conn, $xpSql);
-$xpRows   = [];
-
-if ($xpResult) {
+if ($xpResult = mysqli_query($conn, $xpSql)) {
     while ($row = mysqli_fetch_assoc($xpResult)) {
         $row['level'] = (int)$row['level'];
         $row['xp']    = (int)$row['xp'];
@@ -43,15 +38,7 @@ if ($xpResult) {
 // --------------------------------------
 // 2. Najbardziej aktywni gracze (ALL)
 // --------------------------------------
-//
-// Zakładam tabelę game_results z kolumnami:
-//  - user_id
-//  - game_name (np. 'quiz', 'hangman', 'paper_soccer' itd.)
-//  - result   (np. 'win' / 'loss' albo podobnie)
-//  - score    (opcjonalnie)
-//
-// Jeśli nazwy są inne – popraw w CASE / GROUP BY.
-
+$activityRows = [];
 $activitySql = "
     SELECT
         u.id AS user_id,
@@ -65,11 +52,7 @@ $activitySql = "
     ORDER BY wins DESC, games_played DESC
     LIMIT 10
 ";
-
-$activityResult = mysqli_query($conn, $activitySql);
-$activityRows   = [];
-
-if ($activityResult) {
+if ($activityResult = mysqli_query($conn, $activitySql)) {
     while ($row = mysqli_fetch_assoc($activityResult)) {
         $row['games_played'] = (int)$row['games_played'];
         $row['wins']         = (int)$row['wins'];
@@ -80,9 +63,7 @@ if ($activityResult) {
 // ----------------------------------------
 // 3. Skrócony ranking quizu (TOP 5)
 // ----------------------------------------
-//
-// Uproszczona wersja z games/quiz/ranking.php – wg sumy punktów.
-
+$quizRows = [];
 $quizSql = "
     SELECT 
         u.id AS user_id,
@@ -102,11 +83,7 @@ $quizSql = "
     ORDER BY total_points DESC
     LIMIT 5
 ";
-
-$quizResult = mysqli_query($conn, $quizSql);
-$quizRows   = [];
-
-if ($quizResult) {
+if ($quizResult = mysqli_query($conn, $quizSql)) {
     while ($row = mysqli_fetch_assoc($quizResult)) {
         $row['games_played'] = (int)$row['games_played'];
         $row['total_points'] = (int)$row['total_points'];
@@ -119,8 +96,9 @@ if ($quizResult) {
 <div class="container">
     <h1>Leaderboard – wszystkie gry</h1>
     <p>
-        Zbiorczy ranking graczy z całego portalu. Szczegółowe rankingi dla
-        poszczególnych gier znajdziesz na ich stronach (np. <a href="/games/quiz/ranking.php">Ranking quizu</a>).
+        Zbiorczy ranking graczy z całego portalu. Szczegółowe rankingi
+        poszczególnych gier znajdziesz na ich stronach, np.
+        <a href="/games/quiz/ranking.php">Ranking quizu</a>.
     </p>
 
     <!-- Sekcja 1: Globalny ranking level / XP -->
@@ -214,7 +192,6 @@ if ($quizResult) {
             </p>
         <?php endif; ?>
     </div>
-
 </div>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
