@@ -167,6 +167,7 @@ if (isset($conn) && $conn instanceof mysqli) {
                 <?php if (is_logged_in()): ?>
                     <a href="/games/quiz/add_question.php">Dodaj pytanie</a>
                     <a href="/games/quiz/ranking.php">Ranking quizu</a>
+					<a href="/leaderboard.php">Rankingi</a>
                     <a href="/profile.php">Mój profil</a>
                     <a href="/user/logout.php">Wyloguj</a>
                 <?php else: ?>
