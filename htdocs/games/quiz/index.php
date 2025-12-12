@@ -178,7 +178,7 @@ $icons = [
     </div>
 
 	<p>
-        <a href="leaderboard.php">Zobacz ranking graczy quizu</a>
+        <a href="ranking.php">Zobacz ranking graczy quizu</a>
     </p>
     <p><a href="/index.php">&larr; Wróć do strony głównej</a></p>
 </div>
