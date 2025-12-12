@@ -10,7 +10,7 @@ require_once __DIR__ . '/includes/header.php';
             <h1>Centrum rozrywki dla zespołu</h1>
             <p class="subtitle hero-subtitle">
                 Zróbmy małą przerwę dla głowy. Wybierz grę, zaproś ekipę i zagrajcie on-line –
-                wszystko działa w przeglądarce, nawet z naszym proxy.
+                wszystko działa w przeglądarce. Grajcie, bawcie się, ale się nie oddalajcie!
                 Przed rozpoczęciem gry polecam użyć ctrl + F5 w celu pełnego odświeżenia strony (ignorując cache strony)
             </p>
             <a href="games/quiz/index.php" class="btn btn-primary hero-cta">
