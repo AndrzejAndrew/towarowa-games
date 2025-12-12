@@ -1,0 +1,28 @@
+# System / edytory
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logi i pliki tymczasowe
+*.log
+*.tmp
+*.swp
+*.bak
+
+# Zrzuty / archiwa
+*.zip
+*.tar
+*.tar.gz
+
+# Composer / Node (na przyszłość)
+vendor/
+node_modules/
+
+# Cache PHP / sesje (gdyby kiedyś wpadły)
+cache/
+sessions/
+
+# Pliki lokalnej konfiguracji
+.env
+.env.*
