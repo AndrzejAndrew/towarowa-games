@@ -1,0 +1,37 @@
+name: Deploy to InfinityFree
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'htdocs/**'
+  workflow_dispatch: {}
+
+jobs:
+  ftp-deploy:
+    name: Sync htdocs to InfinityFree
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          # katalog na serwerze – zwykle /htdocs/ dla InfinityFree
+          server-dir: /htdocs/
+          # lokalny katalog do wysyłki
+          local-dir: ./htdocs
+          # opcjonalne wykluczenia
+          exclude: |
+            .git*
+            **/.git*
+            .github/**
+            **/.github/**
+            **/node_modules/**
+            **/vendor/**
