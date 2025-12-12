@@ -7,7 +7,7 @@ require_once __DIR__ . '/includes/header.php';
  * GLOBALNY LEADERBOARD
  *
  * Sekcje:
- *  1. Ranking level / XP (user_levels)
+ *  1. Ranking level / XP (na podstawie xp_log + user_levels)
  *  2. Najbardziej aktywni gracze (game_results)
  *  3. Skrócony ranking quizu (players + games)
  */
@@ -15,29 +15,45 @@ require_once __DIR__ . '/includes/header.php';
 // ---------------------------
 // 1. Ranking level / XP
 // ---------------------------
+
+// Najpierw zbieramy całkowite XP per użytkownik z xp_log
 $xpRows = [];
 $xpSql = "
     SELECT 
-        u.id       AS user_id,
-        u.username AS username,
-        ul.level   AS level,
-        ul.xp      AS xp
-    FROM user_levels ul
-    JOIN users u ON u.id = ul.user_id
-    ORDER BY ul.level DESC, ul.xp DESC
+        t.user_id,
+        t.username,
+        t.total_xp,
+        (
+            SELECT MAX(l.level)
+            FROM user_levels l
+            WHERE l.xp_required <= t.total_xp
+        ) AS level
+    FROM (
+        SELECT 
+            u.id AS user_id,
+            u.username,
+            COALESCE(SUM(xl.xp_delta), 0) AS total_xp
+        FROM users u
+        LEFT JOIN xp_log xl ON xl.user_id = u.id
+        GROUP BY u.id, u.username
+    ) AS t
+    WHERE t.total_xp > 0
+    ORDER BY level DESC, total_xp DESC
     LIMIT 10
 ";
+
 if ($xpResult = mysqli_query($conn, $xpSql)) {
     while ($row = mysqli_fetch_assoc($xpResult)) {
-        $row['level'] = (int)$row['level'];
-        $row['xp']    = (int)$row['xp'];
-        $xpRows[]     = $row;
+        $row['total_xp'] = (int)$row['total_xp'];
+        $row['level']    = (int)($row['level'] ?? 0);
+        $xpRows[]        = $row;
     }
 }
 
 // --------------------------------------
 // 2. Najbardziej aktywni gracze (ALL)
 // --------------------------------------
+
 $activityRows = [];
 $activitySql = "
     SELECT
@@ -52,6 +68,7 @@ $activitySql = "
     ORDER BY wins DESC, games_played DESC
     LIMIT 10
 ";
+
 if ($activityResult = mysqli_query($conn, $activitySql)) {
     while ($row = mysqli_fetch_assoc($activityResult)) {
         $row['games_played'] = (int)$row['games_played'];
@@ -63,6 +80,7 @@ if ($activityResult = mysqli_query($conn, $activitySql)) {
 // ----------------------------------------
 // 3. Skrócony ranking quizu (TOP 5)
 // ----------------------------------------
+
 $quizRows = [];
 $quizSql = "
     SELECT 
@@ -83,6 +101,7 @@ $quizSql = "
     ORDER BY total_points DESC
     LIMIT 5
 ";
+
 if ($quizResult = mysqli_query($conn, $quizSql)) {
     while ($row = mysqli_fetch_assoc($quizResult)) {
         $row['games_played'] = (int)$row['games_played'];
@@ -113,7 +132,7 @@ if ($quizResult = mysqli_query($conn, $quizSql)) {
                     <th>Miejsce</th>
                     <th>Gracz</th>
                     <th>Poziom</th>
-                    <th>XP</th>
+                    <th>Łączne XP</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -122,7 +141,7 @@ if ($quizResult = mysqli_query($conn, $quizSql)) {
                         <td><?php echo $pos++; ?></td>
                         <td><?php echo htmlspecialchars($r['username']); ?></td>
                         <td><?php echo $r['level']; ?></td>
-                        <td><?php echo $r['xp']; ?></td>
+                        <td><?php echo $r['total_xp']; ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
