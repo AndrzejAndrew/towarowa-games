@@ -177,7 +177,10 @@ $icons = [
         </form>
     </div>
 
-    <p style="margin-top:20px;"><a href="/index.php">&larr; Wróć do strony głównej</a></p>
+	<p>
+        <a href="leaderboard.php">Zobacz ranking graczy quizu</a>
+    </p>
+    <p><a href="/index.php">&larr; Wróć do strony głównej</a></p>
 </div>
 
 <script>
