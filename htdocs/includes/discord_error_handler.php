@@ -2,7 +2,8 @@
 // Globalny handler błędów/wyjątków → Discord (przez relay)
 
 require_once __DIR__ . '/discord.php';
-require_once __DIR__ . '/discord_config.php';
+require_once __DIR__ . '/auth.php';
+
 
 function discord_error_handler($errno, $errstr, $errfile, $errline) {
     global $DISCORD_META;

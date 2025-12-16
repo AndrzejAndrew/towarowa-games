@@ -1,9 +1,21 @@
 <?php
-// Adres relaya na CBA – USTAW SWOJĄ DOMENĘ
-define('DISCORD_RELAY_URL', 'http://pracaniezajac.cba.pl/discord_relay/relay.php');
+/**
+ * UWAGA:
+ * Ten plik NIE zawiera sekretów.
+ * Sekrety są wstrzykiwane przez GitHub Actions
+ * do secrets_runtime.php
+ */
 
-// Ten sam tajny token co w relay_config.php na CBA
-define('DISCORD_RELAY_SECRET', 'RELAY_SECRET_HERE');
+if (!defined('DISCORD_RELAY_SECRET')) {
+    http_response_code(500);
+    die('DISCORD_RELAY_SECRET missing (deploy error)');
+}
+
+if (!defined('DISCORD_OAUTH_RELAY_SECRET')) {
+    http_response_code(500);
+    die('DISCORD_OAUTH_RELAY_SECRET missing (deploy error)');
+}
+
 
 // Mapowanie typów – to są stringi, które trafiają do relay.php
 $DISCORD = [
