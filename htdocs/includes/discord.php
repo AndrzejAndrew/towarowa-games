@@ -7,6 +7,7 @@ if (!function_exists('discord_send')) {
     function discord_send($type, $message, $username = "Centrum Rozrywki", $color = 0x5865F2) {
 
         if (!$type || !$message) {
+            error_log('[discord_send] Missing type or message – nothing to send');
             return false;
         }
 
@@ -14,6 +15,7 @@ if (!function_exists('discord_send')) {
         require_once __DIR__ . '/auth.php';
 
         if (!defined('DISCORD_RELAY_URL') || !defined('DISCORD_RELAY_SECRET')) {
+            error_log('[discord_send] DISCORD_RELAY_URL lub DISCORD_RELAY_SECRET nie są zdefiniowane');
             return false;
         }
 
@@ -39,7 +41,19 @@ if (!function_exists('discord_send')) {
         curl_close($ch);
 
         if ($http_code < 200 || $http_code >= 300) {
+            error_log(
+                sprintf(
+                    '[discord_send] Relay HTTP %s, curl_err="%s", response="%s"',
+                    $http_code,
+                    $curl_err,
+                    $response
+                )
+            );
             return "RELAY_HTTP_$http_code: $curl_err $response";
+        }
+
+        if ($curl_err) {
+            error_log('[discord_send] cURL error: ' . $curl_err);
         }
 
         return $response ?: true;
