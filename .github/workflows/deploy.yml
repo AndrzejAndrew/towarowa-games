@@ -17,17 +17,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Generate Discord runtime secrets
+        shell: bash
+        env:
+          DISCORD_RELAY_URL: ${{ vars.DISCORD_RELAY_URL }}
+          DISCORD_RELAY_SECRET: ${{ secrets.DISCORD_RELAY_SECRET }}
+          DISCORD_OAUTH_RELAY_SECRET: ${{ secrets.DISCORD_OAUTH_RELAY_SECRET }}
+        run: |
+          mkdir -p htdocs/includes
+
+          echo "::add-mask::$DISCORD_RELAY_SECRET"
+          echo "::add-mask::$DISCORD_OAUTH_RELAY_SECRET"
+
+          php -r '
+            $out = "<?php\n"
+                 . "define(\"DISCORD_RELAY_URL\", " . var_export(getenv("DISCORD_RELAY_URL"), true) . ");\n"
+                 . "define(\"DISCORD_RELAY_SECRET\", " . var_export(getenv("DISCORD_RELAY_SECRET"), true) . ");\n"
+                 . "define(\"DISCORD_OAUTH_RELAY_SECRET\", " . var_export(getenv("DISCORD_OAUTH_RELAY_SECRET"), true) . ");\n";
+            file_put_contents("htdocs/includes/secrets_runtime.php", $out);
+          ';
+
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.6
         with:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          # katalog na serwerze – zwykle /htdocs/ dla InfinityFree
           server-dir: /htdocs/
-          # lokalny katalog do wysyłki
           local-dir: ./htdocs/
-          # opcjonalne wykluczenia
           exclude: |
             .git*
             **/.git*
