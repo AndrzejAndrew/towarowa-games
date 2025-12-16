@@ -17,9 +17,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate Discord secrets for InfinityFree
+      - name: Generate Discord runtime secrets
         shell: bash
         env:
+          DISCORD_RELAY_URL: ${{ vars.DISCORD_RELAY_URL }}
           DISCORD_RELAY_SECRET: ${{ secrets.DISCORD_RELAY_SECRET }}
           DISCORD_OAUTH_RELAY_SECRET: ${{ secrets.DISCORD_OAUTH_RELAY_SECRET }}
         run: |
@@ -30,6 +31,7 @@ jobs:
 
           php -r '
             $out = "<?php\n"
+                 . "define(\"DISCORD_RELAY_URL\", " . var_export(getenv("DISCORD_RELAY_URL"), true) . ");\n"
                  . "define(\"DISCORD_RELAY_SECRET\", " . var_export(getenv("DISCORD_RELAY_SECRET"), true) . ");\n"
                  . "define(\"DISCORD_OAUTH_RELAY_SECRET\", " . var_export(getenv("DISCORD_OAUTH_RELAY_SECRET"), true) . ");\n";
             file_put_contents("htdocs/includes/secrets_runtime.php", $out);

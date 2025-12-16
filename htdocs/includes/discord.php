@@ -11,7 +11,7 @@ if (!function_exists('discord_send')) {
         }
 
         // Wczytujemy config z adresem relaya i tokenem
-        require_once __DIR__ . '/discord_config.php';
+        require_once __DIR__ . '/auth.php';
 
         if (!defined('DISCORD_RELAY_URL') || !defined('DISCORD_RELAY_SECRET')) {
             return false;
