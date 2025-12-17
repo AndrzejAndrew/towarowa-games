@@ -26,3 +26,6 @@ sessions/
 # Pliki lokalnej konfiguracji
 .env
 .env.*
+
+# secrets generated during deploy
+htdocs/includes/secrets_runtime.php

@@ -1,0 +1,31 @@
+name: Discord updates
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  notify-discord:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send message to Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          MERGED_AT: ${{ github.event.pull_request.merged_at }}
+        run: |
+          DATE="${MERGED_AT%%T*}"
+          MESSAGE="**${DATE}** – zmergowano PR #${PR_NUMBER}: ${PR_TITLE} (autor: ${PR_AUTHOR})"
+
+          # Prosty JSON – zakładamy, że w tytule PR nie ma cudzysłowów.
+          PAYLOAD="{\"content\": \"${MESSAGE}\"}"
+
+          curl -X POST -H "Content-Type: application/json" \
+               -d "${PAYLOAD}" \
+               "${WEBHOOK_URL}"

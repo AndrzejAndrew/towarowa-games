@@ -16,7 +16,6 @@ if (!defined('DISCORD_OAUTH_RELAY_SECRET')) {
     die('DISCORD_OAUTH_RELAY_SECRET missing (deploy error)');
 }
 
-
 // Mapowanie typów – to są stringi, które trafiają do relay.php
 $DISCORD = [
     "bug"      => "bug",
