@@ -24,6 +24,18 @@ function lb_fetch_all(mysqli $conn, string $sql): array {
     return $rows;
 }
 
+// Format daty zapisanej w bazie (zakładamy UTC) do czasu lokalnego (PL).
+function lb_fmt_dt(?string $dt, string $outFormat = 'Y-m-d H:i:s'): string {
+    if (!$dt) return '-';
+    try {
+        $utc = new DateTimeImmutable($dt, new DateTimeZone('UTC'));
+        return $utc->setTimezone(new DateTimeZone('Europe/Warsaw'))->format($outFormat);
+    } catch (Throwable $e) {
+        // Jeśli format jest nietypowy – pokaż wartość oryginalną zamiast wywalać stronę.
+        return (string)$dt;
+    }
+}
+
 // ---------------------------
 // 0) Ustawienia
 // ---------------------------
@@ -372,7 +384,7 @@ $battleshipRows = lb_game_results_ranking($conn, 'battleship', $LIMIT_GAME);
                         <td><?php echo (int)$r['losses']; ?></td>
                         <td><?php echo (int)$r['draws']; ?></td>
                         <td><?php echo number_format((float)$r['winrate'], 1); ?>%</td>
-                        <td><?php echo htmlspecialchars($r['last_game'] ?? ''); ?></td>
+                        <td><?php echo htmlspecialchars(lb_fmt_dt($r['last_game'] ?? null)); ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -481,7 +493,7 @@ $battleshipRows = lb_game_results_ranking($conn, 'battleship', $LIMIT_GAME);
                         <td><?php echo (int)$r['games_lost']; ?></td>
                         <td><?php echo (int)$r['games_drawn']; ?></td>
                         <td><?php echo number_format((float)$r['winrate'], 1); ?>%</td>
-                        <td><?php echo htmlspecialchars($r['last_played'] ?? ''); ?></td>
+                        <td><?php echo htmlspecialchars(lb_fmt_dt($r['last_played'] ?? null)); ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -602,7 +614,7 @@ $battleshipRows = lb_game_results_ranking($conn, 'battleship', $LIMIT_GAME);
                         <td><?php echo (int)$r['losses']; ?></td>
                         <td><?php echo (int)$r['draws']; ?></td>
                         <td><?php echo number_format((float)$r['winrate'], 1); ?>%</td>
-                        <td><?php echo htmlspecialchars($r['last_game'] ?? ''); ?></td>
+                        <td><?php echo htmlspecialchars(lb_fmt_dt($r['last_game'] ?? null)); ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -645,7 +657,7 @@ $battleshipRows = lb_game_results_ranking($conn, 'battleship', $LIMIT_GAME);
                         <td><?php echo (int)$r['losses']; ?></td>
                         <td><?php echo (int)$r['draws']; ?></td>
                         <td><?php echo number_format((float)$r['winrate'], 1); ?>%</td>
-                        <td><?php echo htmlspecialchars($r['last_game'] ?? ''); ?></td>
+                        <td><?php echo htmlspecialchars(lb_fmt_dt($r['last_game'] ?? null)); ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

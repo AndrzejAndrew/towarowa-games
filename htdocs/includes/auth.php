@@ -1,5 +1,15 @@
 <?php
 // ------------------------------------------------------
+// STREFA CZASOWA (UI/LOGI)
+// ------------------------------------------------------
+// Portal działa w Polsce – ustawiamy domyślną strefę czasu dla PHP,
+// aby logi/komunikaty i formatowanie dat było spójne.
+// (Baza może przechowywać DATETIME w UTC; konwersję do PL robimy w widoku.)
+if (function_exists('date_default_timezone_set')) {
+    date_default_timezone_set('Europe/Warsaw');
+}
+
+// ------------------------------------------------------
 // BOOTSTRAP – sekrety + konfiguracja Discord
 // ------------------------------------------------------
 $secretsFile = __DIR__ . '/secrets_runtime.php';
