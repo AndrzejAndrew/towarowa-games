@@ -2,7 +2,6 @@
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/discord.php';
-require_once __DIR__ . '/../../includes/auth.php';
 
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -142,7 +141,14 @@ if ($mode === 'classic') {
         $round++;
     }
 }
-
+/*
+$res = discord_send('quiz', 'TEST WEBHOOK ' . date('H:i:s'));
+file_put_contents(
+    __DIR__ . '/_discord_test.log',
+    date('c') . ' => ' . var_export($res, true) . PHP_EOL,
+    FILE_APPEND
+);
+*/
 /*
     7. DISCORD – info
 */
