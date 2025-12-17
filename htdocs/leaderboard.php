@@ -27,8 +27,9 @@ function lb_fetch_all(mysqli $conn, string $sql): array {
 // ---------------------------
 // 0) Ustawienia
 // ---------------------------
-$LIMIT_GLOBAL = 20;
-$LIMIT_GAME   = 20;
+// Na leaderboardzie pokazujemy skrót (TOP N), a pełne zestawienia są w rankingach poszczególnych gier.
+$LIMIT_GLOBAL = 10;
+$LIMIT_GAME   = 10;
 
 // ---------------------------
 // 1) Ranking poziomu (XP)
@@ -178,7 +179,7 @@ unset($r);
 
 $paperSoccerRows = lb_fetch_all($conn, "
     SELECT
-        COALESCE(u.username, 'Gość') AS username,
+        u.username AS username,
         s.games_played,
         s.games_won,
         s.games_lost,
@@ -186,7 +187,7 @@ $paperSoccerRows = lb_fetch_all($conn, "
         s.last_played,
         CASE WHEN s.games_played > 0 THEN ROUND(100.0 * s.games_won / s.games_played, 1) ELSE 0 END AS winrate
     FROM paper_soccer_stats s
-    LEFT JOIN users u ON u.id = s.user_id
+    JOIN users u ON u.id = s.user_id
     ORDER BY s.games_won DESC, s.games_played DESC
     LIMIT {$LIMIT_GAME}
 ");

@@ -24,6 +24,23 @@ function get_active_season($conn) {
     return $row ? intval($row['id']) : null;
 }
 
+// ------------------------------------------------
+//  Czy user_id istnieje w tabeli users?
+//  (chroni przed nabijaniem statystyk przez gości,
+//   którzy mają losowy guest_id w sesji)
+// ------------------------------------------------
+function stats_user_exists(mysqli $conn, int $user_id): bool {
+    if ($user_id <= 0) return false;
+    $st = $conn->prepare("SELECT 1 FROM users WHERE id = ? LIMIT 1");
+    if (!$st) return false;
+    $st->bind_param("i", $user_id);
+    $st->execute();
+    $st->store_result();
+    $ok = ($st->num_rows > 0);
+    $st->close();
+    return $ok;
+}
+
 
 // ------------------------------------------------
 //  REJESTRACJA WYNIKU GRY
@@ -32,6 +49,8 @@ function stats_register_result($user_id, $game_code, $result, $points = 0) {
     global $conn;
 
     if (!$user_id || !$game_code || !$result) return false;
+    // Zapisujemy tylko dla realnych kont (users). Gość ma losowe guest_id, którego nie ma w users.
+    if (!stats_user_exists($conn, (int)$user_id)) return false;
 
     $season_id = get_active_season($conn);
 

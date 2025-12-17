@@ -38,8 +38,23 @@ if ($game_id <= 0) {
 // ----------------------------------------------------
 // Ranking utils (bez zmian)
 // ----------------------------------------------------
+function ps_user_exists(mysqli $conn, int $user_id): bool {
+    if ($user_id <= 0) return false;
+    $st = $conn->prepare("SELECT 1 FROM users WHERE id = ? LIMIT 1");
+    if (!$st) return false;
+    $st->bind_param("i", $user_id);
+    $st->execute();
+    $st->store_result();
+    $ok = ($st->num_rows > 0);
+    $st->close();
+    return $ok;
+}
+
 function ps_add_result($conn, $user_id, $result) {
+    // Wyniki zapisujemy wyłącznie dla użytkowników zalogowanych (istniejących w tabeli users).
+    // Gość ma w sesji losowe guest_id (6 cyfr), które nie jest rekordem w users.
     if ($user_id <= 0) return;
+    if (!ps_user_exists($conn, (int)$user_id)) return;
 
     $won = $lost = $drawn = 0;
     if ($result === 'win')  $won = 1;

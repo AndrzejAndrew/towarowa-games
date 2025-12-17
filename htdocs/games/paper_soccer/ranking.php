@@ -4,6 +4,8 @@ require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/header.php';
 
 // Pobieramy ranking
+$limit = 50; // skrót na stronie rankingu (pełny ranking można dodać jako paginację, jeśli będzie potrzeba)
+
 $q = "
     SELECT 
         u.username,
@@ -13,8 +15,9 @@ $q = "
         s.games_drawn,
         s.last_played
     FROM paper_soccer_stats s
-    LEFT JOIN users u ON u.id = s.user_id
+    JOIN users u ON u.id = s.user_id
     ORDER BY s.games_won DESC, s.games_played DESC
+    LIMIT {$limit}
 ";
 $res = mysqli_query($conn, $q);
 
