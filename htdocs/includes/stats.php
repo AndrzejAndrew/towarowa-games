@@ -94,6 +94,11 @@ function stats_add_xp(
     $ok = $stmt->execute();
     $stmt->close();
 
+    if ($ok) {
+        // sprawdź odznaki poziomowe po każdej zmianie XP
+        stats_check_level_achievements($user_id);
+    }
+
     return (bool)$ok;
 }
 
@@ -269,6 +274,38 @@ function stats_check_global_achievements(int $user_id): void {
     if ($distinctGames >= 6) {
         stats_award_achievement($user_id, 'all_rounder_6');
     }
+}
+
+// ------------------------------------------------
+//  Odznaki za poziomy (bez dodatkowego XP - xp_reward=0)
+// ------------------------------------------------
+function stats_check_level_achievements(int $user_id): void {
+    global $conn;
+
+    if ($user_id <= 0) return;
+
+    // Total XP
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(xp_delta), 0) AS total_xp FROM xp_log WHERE user_id = ?");
+    $stmt->bind_param('i', $user_id);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    $xp = (int)($row['total_xp'] ?? 0);
+
+    // Current level from user_levels
+    $stmt = $conn->prepare("SELECT COALESCE(MAX(level), 1) AS lvl FROM user_levels WHERE xp_required <= ?");
+    $stmt->bind_param('i', $xp);
+    $stmt->execute();
+    $row2 = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    $lvl = (int)($row2['lvl'] ?? 1);
+
+    if ($lvl >= 10)  stats_award_achievement($user_id, 'level_10');
+    if ($lvl >= 25)  stats_award_achievement($user_id, 'level_25');
+    if ($lvl >= 50)  stats_award_achievement($user_id, 'level_50');
+    if ($lvl >= 100) stats_award_achievement($user_id, 'level_100');
 }
 
 // ------------------------------------------------
