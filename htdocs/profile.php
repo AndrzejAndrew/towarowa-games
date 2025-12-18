@@ -26,12 +26,14 @@ $user_id = (int)$_SESSION['user_id'];
 // --------------------------------------
 // 1. Dane użytkownika
 // --------------------------------------
-$sqlUser = "SELECT username, created_at FROM users WHERE id = $user_id";
+$sqlUser = "SELECT username, created_at, login_streak, max_login_streak FROM users WHERE id = $user_id";
 $resUser = mysqli_query($conn, $sqlUser);
 $userRow = $resUser ? mysqli_fetch_assoc($resUser) : null;
 
 $username   = $userRow['username'] ?? 'Nieznany';
 $created_at = $userRow['created_at'] ?? null;
+$login_streak = (int)($userRow['login_streak'] ?? 0);
+$max_login_streak = (int)($userRow['max_login_streak'] ?? 0);
 
 // --------------------------------------
 // 2. XP i poziom
@@ -224,22 +226,73 @@ if ($resLast) {
     }
 }
 // --------------------------------------
-// 7. Odznaki użytkownika
+// 7. Odznaki (wszystkie + postęp)
 // --------------------------------------
 $sqlAch = "
-    SELECT a.name, a.description, a.icon, ua.earned_at
-    FROM user_achievements ua
-    JOIN achievements a ON a.code = ua.achievement_code
-    WHERE ua.user_id = $user_id
-    ORDER BY ua.earned_at DESC
+    SELECT a.code, a.name, a.description, a.icon, a.xp_reward, ua.earned_at
+    FROM achievements a
+    LEFT JOIN user_achievements ua
+      ON ua.achievement_code = a.code
+     AND ua.user_id = $user_id
+    ORDER BY a.id ASC
 ";
 $resAch = mysqli_query($conn, $sqlAch);
 
-$myAchievements = [];
+$allAchievements = [];
 if ($resAch) {
     while ($r = mysqli_fetch_assoc($resAch)) {
-        $myAchievements[] = $r;
+        $allAchievements[] = $r;
     }
+}
+
+// pomocniczo: ile różnych gier
+$distinct_games = count($perGame);
+
+// funkcja postępu dla wybranych odznak (te, które już mamy w bazie)
+function achievement_progress($code, $total_games, $wins, $best_streak, $distinct_games, $login_streak, $current_level) {
+    $targets = [
+        'first_game'     => 1,
+        'first_win'      => 1,
+        'veteran_25'     => 25,
+        'veteran_100'    => 100,
+        'all_rounder_3'  => 3,
+        'all_rounder_6'  => 6,
+        'win_streak_3'   => 3,
+        'win_streak_5'   => 5,
+        'win_streak_10'  => 10,
+        'login_streak_7' => 7,
+        'login_streak_30'=> 30,
+        'level_10'       => 10,
+        'level_25'       => 25,
+        'level_50'       => 50,
+        'level_100'      => 100,
+    ];
+
+    if (!isset($targets[$code])) {
+        return [null, null, null]; // brak mierzalnego postępu
+    }
+
+    $target = (int)$targets[$code];
+    $cur = 0;
+
+    if ($code === 'first_game' || $code === 'veteran_25' || $code === 'veteran_100') {
+        $cur = $total_games;
+    } elseif ($code === 'first_win') {
+        $cur = $wins;
+    } elseif (strpos($code, 'all_rounder_') === 0) {
+        $cur = $distinct_games;
+    } elseif (strpos($code, 'win_streak_') === 0) {
+        $cur = $best_streak;
+    } elseif (strpos($code, 'login_streak_') === 0) {
+        $cur = $login_streak;
+    } elseif (strpos($code, 'level_') === 0) {
+        $cur = $current_level;
+    }
+
+    $cur = max(0, (int)$cur);
+    $pct = ($target > 0) ? max(0, min(100, (int)round(($cur / $target) * 100))) : 0;
+
+    return [$cur, $target, $pct];
 }
 
 ?>
@@ -378,31 +431,83 @@ if ($resAch) {
             </div>
         </div>
     </div>
+
 <div class="row mt-3">
     <div class="col-12 mb-3">
         <div class="card">
             <div class="card-body">
-                <h2 class="h4 mb-3">🎖 Odznaki</h2>
+                <div class="badges-header">
+                    <h2 class="h4 mb-1">Odznaki</h2>
+                    <?php
+                    $earnedCount = 0;
+                    foreach ($allAchievements as $a) {
+                        if (!empty($a['earned_at'])) $earnedCount++;
+                    }
+                    ?>
+                    <div class="badges-subtitle">
+                        Zdobyte: <strong><?php echo $earnedCount; ?></strong> / <?php echo count($allAchievements); ?>
+                        <span class="badges-subnote">– odznaki są naliczane tylko dla zalogowanych.</span>
+                    </div>
+                </div>
 
-                <?php if (empty($myAchievements)): ?>
-                    <p class="text-muted">Brak zdobytych odznak. Graj więcej, aby je odblokować!</p>
+                <?php if (empty($allAchievements)): ?>
+                    <p class="text-muted">Brak zdefiniowanych odznak w tabeli <code>achievements</code>.</p>
                 <?php else: ?>
-                    <div class="row">
-                        <?php foreach ($myAchievements as $ach): ?>
-                            <div class="col-md-4 col-sm-6 mb-3">
-                                <div class="p-2 border rounded">
-                                    <?php if (!empty($ach['icon'])): ?>
-                                        <img src="/assets/badges/<?php echo htmlspecialchars($ach['icon']); ?>" 
-                                             alt="" style="width:40px; height:40px;">
-                                    <?php endif; ?>
+                    <div class="badge-grid">
+                        <?php foreach ($allAchievements as $a): ?>
+                            <?php
+                            $code = $a['code'];
+                            $earnedAt = $a['earned_at'] ?? null;
+                            $isEarned = !empty($earnedAt);
 
-                                    <h5 class="mt-2 mb-1"><?php echo htmlspecialchars($ach['name']); ?></h5>
-                                    <p class="small mb-1 text-muted">
-                                        <?php echo htmlspecialchars($ach['description']); ?>
-                                    </p>
-                                    <p class="small text-end mb-0 text-secondary">
-                                        Zdobyto: <?php echo htmlspecialchars($ach['earned_at']); ?>
-                                    </p>
+                            // ikonka: a.icon (jeśli ustawiona), w przeciwnym razie code.svg
+                            $iconFile = $a['icon'] ?? '';
+                            if (empty($iconFile)) {
+                                $iconFile = $code . '.svg';
+                            }
+                            $iconPath = "/assets/badges/" . $iconFile;
+
+                            // progress (jeśli umiemy policzyć)
+                            [$cur, $target, $pct] = achievement_progress(
+                                $code,
+                                $total_games,
+                                $wins,
+                                $best_streak,
+                                $distinct_games,
+                                $login_streak,
+                                $current_level
+                            );
+                            ?>
+                            <div class="badge-card <?php echo $isEarned ? '' : 'badge-locked'; ?>">
+                                <div class="badge-top">
+                                    <div class="badge-icon-wrap">
+                                        <img class="badge-icon" src="<?php echo htmlspecialchars($iconPath); ?>" alt="">
+                                        <?php if (!$isEarned): ?>
+                                            <div class="badge-lock" title="Nieodblokowane">🔒</div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="badge-title">
+                                        <div class="badge-name"><?php echo htmlspecialchars($a['name']); ?></div>
+                                        <div class="badge-desc"><?php echo htmlspecialchars($a['description']); ?></div>
+                                    </div>
+                                </div>
+
+                                <div class="badge-meta">
+                                    <?php if ($isEarned): ?>
+                                        <div class="badge-earned">Zdobyto: <?php echo htmlspecialchars($earnedAt); ?></div>
+                                    <?php elseif ($target !== null): ?>
+                                        <div class="badge-progress">
+                                            <div class="badge-progress-row">
+                                                <span>Postęp</span>
+                                                <span><?php echo (int)$cur; ?> / <?php echo (int)$target; ?></span>
+                                            </div>
+                                            <div class="badge-progress-bar">
+                                                <div class="badge-progress-fill" style="width: <?php echo (int)$pct; ?>%"></div>
+                                            </div>
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="badge-earned badge-muted">Odznaka specjalna – brak licznika postępu.</div>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         <?php endforeach; ?>
@@ -413,7 +518,7 @@ if ($resAch) {
     </div>
 </div>
 
-    <!-- Ostatnie gry -->
+<!-- Ostatnie gry -->
     <div class="row mt-3">
         <div class="col-12 mb-3">
             <div class="card">
