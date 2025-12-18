@@ -290,7 +290,7 @@ if ($resAch) {
                         </div>
                     <?php else: ?>
                         <p class="mb-0 text-muted">
-                            Brak zdefiniowanego kolejnego poziomu w tabeli <code>user_levels</code>.
+                            Osiągnąłeś maksymalny poziom.
                         </p>
                     <?php endif; ?>
                 </div>
