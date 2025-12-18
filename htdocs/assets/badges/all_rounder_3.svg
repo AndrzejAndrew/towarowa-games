@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Wielobój (3)">
+  <defs>
+    <radialGradient id="gMedal" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="35%" stop-color="#e6edf6" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#a7b0ba" stop-opacity="1"/>
+    </radialGradient>
+    <linearGradient id="gRib1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#245fb8"/>
+      <stop offset="100%" stop-color="#1b3a6b"/>
+    </linearGradient>
+    <linearGradient id="gMetalEdge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="55%" stop-color="#000000" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.18"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- ribbon -->
+  <g filter="url(#shadow)">
+    <path d="M64 18 L104 18 L128 78 L88 86 Z" fill="url(#gRib1)" stroke="#2b0b0b" stroke-opacity="0.35"/>
+    <path d="M152 18 L192 18 L168 86 L128 78 Z" fill="url(#gRib1)" stroke="#2b0b0b" stroke-opacity="0.35"/>
+  </g>
+
+  <!-- medal -->
+  <g filter="url(#shadow)">
+    <circle cx="128" cy="150" r="86" fill="url(#gMedal)" stroke="#a7b0ba" stroke-width="6"/>
+    <circle cx="128" cy="150" r="78" fill="none" stroke="url(#gMetalEdge)" stroke-width="8" opacity="0.9"/>
+    <circle cx="128" cy="150" r="62" fill="rgba(2,6,23,0.25)" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
+    <!-- center icon -->
+    <g transform="translate(128 150)">
+      
+    <circle cx="0" cy="0" r="44" fill="#fff" opacity="0.88"/>
+    <circle cx="0" cy="0" r="38" fill="rgba(2,6,23,0.25)"/>
+    <path d="M-10 -26 L22 -6 L10 26 L-22 6 Z" fill="#fff" opacity="0.9"/>
+    <path d="M-4 -18 L14 -4 L4 18 L-14 4 Z" fill="rgba(2,6,23,0.55)"/>
+    
+    </g>
+  </g>
+
+  <!-- small highlights -->
+  <path d="M78 138 C88 112, 112 96, 140 94" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="6" stroke-linecap="round"/>
+</svg>
