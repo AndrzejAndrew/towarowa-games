@@ -1,10 +1,7 @@
 <?php
-// Ustawienie strefy czasu dla PHP (formatowanie dat, logi)
-// W większości skryptów i tak ładuje się includes/auth.php, ale db.php
-// bywa używane samodzielnie, więc ustawiamy defensywnie tutaj.
-if (function_exists('date_default_timezone_set')) {
-    date_default_timezone_set('Europe/Warsaw');
-}
+// Spójna strefa czasowa w całym portalu (wyświetlanie / logi)
+// Dane w bazie najlepiej trzymać w UTC, a wyświetlać w Europe/Warsaw.
+date_default_timezone_set('Europe/Warsaw');
 
 // Połączenie z bazą danych - uzupełnij danymi z InfinityFree
 $host = "sql112.infinityfree.com";
@@ -16,10 +13,10 @@ $conn = mysqli_connect($host, $user, $pass, $db);
 if (!$conn) {
     die("Database connection error: " . mysqli_connect_error());
 }
+
 mysqli_set_charset($conn, "utf8mb4");
 
-// MySQL: ustawiamy strefę czasu sesji na UTC, żeby NOW()/CURRENT_TIMESTAMP
-// zawsze dawały stabilny zapis czasu niezależnie od hostingu.
-// (Wyświetlanie dla użytkownika robimy w Europe/Warsaw.)
+// Wymuś UTC na poziomie sesji MySQL (stabilne NOW()/CURRENT_TIMESTAMP)
+// Nie wymaga uprawnień GLOBAL.
 @mysqli_query($conn, "SET time_zone = '+00:00'");
 ?>
