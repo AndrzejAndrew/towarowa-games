@@ -69,30 +69,19 @@ if (is_logged_in()) {
     }
 } else {
     $nickname = $_SESSION['guest_name'] ?? 'Gość';
-    $guest_id = (int)($_SESSION['guest_id'] ?? 0);
-
-    // guest_id jest bezpieczniejszy niż nickname (nickname może się powtórzyć)
-    if ($guest_id > 0) {
-        $stmt = mysqli_prepare($conn,
-            "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND guest_id = ? LIMIT 1"
-        );
-        mysqli_stmt_bind_param($stmt, "ii", $game_id, $guest_id);
-    } else {
-        $stmt = mysqli_prepare($conn,
-            "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ? LIMIT 1"
-        );
-        mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
-    }
-
+    $stmt = mysqli_prepare($conn,
+        "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ? LIMIT 1"
+    );
+    mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
     mysqli_stmt_execute($stmt);
     $res = mysqli_stmt_get_result($stmt);
     $row = mysqli_fetch_assoc($res);
     mysqli_stmt_close($stmt);
-
     if ($row) {
         $player_id = (int)$row['id'];
     }
 }
+
 
 if (!$player_id) {
     echo json_encode(["ok" => false, "error" => "player_not_found"]);
