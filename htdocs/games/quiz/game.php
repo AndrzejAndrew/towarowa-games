@@ -183,6 +183,7 @@ if ($already_answered && $my_time_left_at_answer !== null) {
 <script>
 const gameId = <?php echo (int)$game_id; ?>;
 const timePerQ = <?php echo (int)$time_per_q; ?>;
+const pageRound = <?php echo (int)$current_round; ?>;
 let timeLeft = <?php echo (int)$timeLeftInitial; ?>;
 let answered = <?php echo $already_answered ? 'true' : 'false'; ?>;
 let selected = <?php echo $my_answer !== null ? json_encode($my_answer) : 'null'; ?>;
@@ -282,7 +283,9 @@ async function sendAnswer(letter) {
 }
 
 function pollNext() {
-    fetch('next.php?game=' + gameId)
+    // Przekazujemy rundę klienta – jeśli serwer jest już na innej rundzie,
+    // next.php powinien zwrócić "next" zamiast "wait" (zapobiega rozjechaniu widoków graczy).
+    fetch('next.php?game=' + gameId + '&round=' + pageRound)
         .then(r => r.json())
         .then(data => {
             if (data.action === 'wait') {

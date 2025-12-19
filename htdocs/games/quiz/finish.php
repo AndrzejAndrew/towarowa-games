@@ -167,8 +167,10 @@ while ($qrow = mysqli_fetch_assoc($res_q)):
 
     while ($arow = mysqli_fetch_assoc($res_a)):
         $nickname  = htmlspecialchars($arow['nickname']);
-        $ans_key   = strtolower($arow['answer']);
-        $ans_text  = $ans_key ? $qrow[$ans_key] : "-";
+		// answer może być NULL (timeout) – w PHP 8.1+ strtolower(NULL) jest deprecated.
+		$ans_raw   = $arow['answer'] ?? '';
+		$ans_key   = $ans_raw !== null ? strtolower((string)$ans_raw) : '';
+		$ans_text  = ($ans_key && isset($qrow[$ans_key])) ? $qrow[$ans_key] : "-";
         $correct   = (int)$arow['is_correct'];
         $time_left = (int)$arow['time_left'];
 
