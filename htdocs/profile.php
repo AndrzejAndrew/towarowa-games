@@ -3,6 +3,7 @@
 
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/achievements.php';
 require_once __DIR__ . '/includes/header.php';
 
 if (!is_logged_in()) {
@@ -295,6 +296,50 @@ function achievement_progress($code, $total_games, $wins, $best_streak, $distinc
     return [$cur, $target, $pct];
 }
 
+// ------------------------------------------------------
+// AUTO-SYNC odznak (backfill bez spamu)
+// Jeżeli spełniasz warunek, a odznaka nie została wpisana do user_achievements
+// ------------------------------------------------------
+$didAward = false;
+$earnedSet = [];
+foreach ($allAchievements as $aTmp) {
+    if (!empty($aTmp['earned_at'])) {
+        $earnedSet[$aTmp['code']] = true;
+    }
+}
+
+$syncCodes = [
+    'first_game','first_win','veteran_25','veteran_100',
+    'all_rounder_3','all_rounder_6',
+    'win_streak_3','win_streak_5','win_streak_10',
+    'login_streak_7','login_streak_30',
+    'level_10','level_25','level_50','level_100'
+];
+
+if (function_exists('award_achievement')) {
+    foreach ($syncCodes as $codeSync) {
+        if (isset($earnedSet[$codeSync])) continue;
+        [$curS, $targetS, $pctS] = achievement_progress($codeSync, $total_games, $wins, $best_streak, $distinct_games, $login_streak, $current_level);
+        if ($targetS !== null && $curS !== null && (int)$curS >= (int)$targetS) {
+            // silent=true: nie spamuj Discordem podczas naprawy starych wyników
+            if (award_achievement($user_id, $codeSync, true)) {
+                $didAward = true;
+            }
+        }
+    }
+}
+
+if ($didAward) {
+    // odśwież listę, żeby UI od razu pokazał zdobyte
+    $allAchievements = [];
+    $resAch2 = mysqli_query($conn, $sqlAch);
+    if ($resAch2) {
+        while ($r2 = mysqli_fetch_assoc($resAch2)) {
+            $allAchievements[] = $r2;
+        }
+    }
+}
+
 ?>
 <div class="container mt-4 mb-4">
     <div class="row">
@@ -465,6 +510,12 @@ function achievement_progress($code, $total_games, $wins, $best_streak, $distinc
                             if (empty($iconFile)) {
                                 $iconFile = $code . '.svg';
                             }
+                            // bezpieczeństwo: tylko nazwa pliku, bez ścieżek
+                            $iconFile = basename($iconFile);
+                            $fsIcon = __DIR__ . '/assets/badges/' . $iconFile;
+                            if (!file_exists($fsIcon)) {
+                                $iconFile = 'placeholder.svg';
+                            }
                             $iconPath = "/assets/badges/" . $iconFile;
 
                             // progress (jeśli umiemy policzyć)
@@ -481,7 +532,7 @@ function achievement_progress($code, $total_games, $wins, $best_streak, $distinc
                             <div class="badge-card <?php echo $isEarned ? '' : 'badge-locked'; ?>">
                                 <div class="badge-top">
                                     <div class="badge-icon-wrap">
-                                        <img class="badge-icon" src="<?php echo htmlspecialchars($iconPath); ?>" alt="">
+                                        <img class="badge-icon" src="<?php echo htmlspecialchars($iconPath); ?>" alt="" onerror="this.onerror=null;this.src='/assets/badges/placeholder.svg';">
                                         <?php if (!$isEarned): ?>
                                             <div class="badge-lock" title="Nieodblokowane">🔒</div>
                                         <?php endif; ?>
@@ -499,7 +550,13 @@ function achievement_progress($code, $total_games, $wins, $best_streak, $distinc
                                         <div class="badge-progress">
                                             <div class="badge-progress-row">
                                                 <span>Postęp</span>
-                                                <span><?php echo (int)$cur; ?> / <?php echo (int)$target; ?></span>
+                                                <span>
+                                                    <?php if ((int)$cur >= (int)$target): ?>
+                                                        Ukończone
+                                                    <?php else: ?>
+                                                        <?php echo (int)$cur; ?> / <?php echo (int)$target; ?>
+                                                    <?php endif; ?>
+                                                </span>
                                             </div>
                                             <div class="badge-progress-bar">
                                                 <div class="badge-progress-fill" style="width: <?php echo (int)$pct; ?>%"></div>
