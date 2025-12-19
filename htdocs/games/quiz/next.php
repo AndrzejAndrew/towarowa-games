@@ -1,72 +1,229 @@
 <?php
-session_start();
 require_once __DIR__ . '/../../includes/db.php';
+require_once __DIR__ . '/../../includes/auth.php';
 
-header('Content-Type: application/json');
+header("Content-Type: application/json");
 
-$code = strtoupper(trim($_GET['code'] ?? ''));
-$round = (int)($_GET['round'] ?? 0);
-
-if ($code === '' || $round <= 0) {
-    echo json_encode(['action' => 'wait', 'error' => 'bad_params']);
+$game_id = (int)($_GET['game'] ?? 0);
+if ($game_id <= 0) {
+    echo json_encode(["action" => "error", "msg" => "Brak ID gry"]);
     exit;
 }
 
-// gra
-$res = mysqli_query($conn, "SELECT id, total_rounds, current_round, status FROM games WHERE code = '$code'");
-$game = mysqli_fetch_assoc($res);
-if (!$game) {
-    echo json_encode(['action' => 'finish', 'error' => 'no_game']);
-    exit;
-}
-$game_id = (int)$game['id'];
-
-if ($game['status'] === 'finished') {
-    echo json_encode(['action' => 'finish']);
-    exit;
-}
-
-// ilu graczy
-$res = mysqli_query($conn, "SELECT COUNT(*) AS c FROM players WHERE game_id = $game_id");
-$row = mysqli_fetch_assoc($res);
-$total_players = (int)$row['c'];
-
-// jakie pytanie jest w tej rundzie
-$res = mysqli_query($conn,
-    "SELECT question_id FROM game_questions WHERE game_id = $game_id AND round_number = $round"
-);
-$gq = mysqli_fetch_assoc($res);
-if (!$gq) {
-    // brak pytania – kończymy
-    mysqli_query($conn, "UPDATE games SET status = 'finished' WHERE id = $game_id");
-    echo json_encode(['action' => 'finish']);
-    exit;
-}
-$question_id = (int)$gq['question_id'];
-
-// ile odpowiedzi
-$res = mysqli_query($conn,
-    "SELECT COUNT(*) AS c FROM answers
-     WHERE game_id = $game_id AND question_id = $question_id"
-);
-$row = mysqli_fetch_assoc($res);
-$answers_count = (int)$row['c'];
-
-if ($answers_count < $total_players) {
-    // jeszcze czekamy
-    echo json_encode(['action' => 'wait', 'players' => $total_players, 'answers' => $answers_count]);
-    exit;
-}
-
-// wszyscy odpowiedzieli -> przechodzimy dalej
-if ($round < (int)$game['total_rounds']) {
-    // zwiększamy bieżącą rundę, jeśli jeszcze jej nie zwiększono
-    if ((int)$game['current_round'] == $round) {
-        mysqli_query($conn, "UPDATE games SET current_round = current_round + 1 WHERE id = $game_id");
+function quiz_get_lock(string $key, int $timeoutSeconds = 0): bool
+{
+    global $conn;
+    $k = mysqli_real_escape_string($conn, $key);
+    $res = mysqli_query($conn, "SELECT GET_LOCK('$k', $timeoutSeconds) AS l");
+    if (!$res) {
+        return false;
     }
-    echo json_encode(['action' => 'next']);
-} else {
-    // koniec gry
-    mysqli_query($conn, "UPDATE games SET status = 'finished' WHERE id = $game_id");
-    echo json_encode(['action' => 'finish']);
+    $row = mysqli_fetch_assoc($res);
+    return (int)($row['l'] ?? 0) === 1;
+}
+
+function quiz_release_lock(string $key): void
+{
+    global $conn;
+    $k = mysqli_real_escape_string($conn, $key);
+    @mysqli_query($conn, "SELECT RELEASE_LOCK('$k')");
+}
+
+function quiz_safe_update(string $sql_with_timers, string $sql_fallback): bool
+{
+    global $conn;
+    if (mysqli_query($conn, $sql_with_timers)) {
+        return true;
+    }
+    if (mysqli_errno($conn) === 1054) {
+        return (bool)mysqli_query($conn, $sql_fallback);
+    }
+    return false;
+}
+
+// Blokujemy operacje przejścia na danej grze – minimalizuje wyścigi pomiędzy klientami.
+$lockKey = "quiz_next_" . $game_id;
+if (!quiz_get_lock($lockKey, 0)) {
+    echo json_encode(["action" => "wait", "busy" => true]);
+    exit;
+}
+
+try {
+    // pobierz stan gry
+    $res = mysqli_query($conn,
+        "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at
+         FROM games WHERE id = $game_id LIMIT 1"
+    );
+    $game = $res ? mysqli_fetch_assoc($res) : null;
+
+    if (!$game) {
+        echo json_encode(["action" => "error", "msg" => "Gra nie istnieje"]);
+        exit;
+    }
+
+    if (($game['status'] ?? '') !== 'running') {
+        echo json_encode(["action" => "wait", "status" => $game['status']]);
+        exit;
+    }
+
+    $current_round   = (int)$game['current_round'];
+    $total_rounds    = (int)$game['total_rounds'];
+    $timePerQuestion = (int)$game['time_per_question'];
+    $mode            = $game['mode'] ?? 'classic';
+
+    // Jeśli gra już przekroczyła total_rounds – zakończ
+    if ($total_rounds > 0 && $current_round > $total_rounds) {
+        quiz_safe_update(
+            "UPDATE games SET status='finished', round_ends_at=NULL, vote_ends_at=NULL WHERE id=$game_id",
+            "UPDATE games SET status='finished' WHERE id=$game_id"
+        );
+        echo json_encode(["action" => "finish"]);
+        exit;
+    }
+
+    // pobierz question_id z aktualnej rundy
+    $qres = mysqli_query($conn,
+        "SELECT question_id FROM game_questions WHERE game_id=$game_id AND round_number=$current_round LIMIT 1"
+    );
+    $qrow = $qres ? mysqli_fetch_assoc($qres) : null;
+    $question_id = (int)($qrow['question_id'] ?? 0);
+
+    // W trybie dynamicznym w pewnych momentach runda może nie mieć przypisanego pytania (głosowanie).
+    if ($question_id <= 0) {
+        // jeśli to nie koniec gry, pozwól klientowi przejść (game.php i tak przerzuci na vote.php)
+        if ($current_round <= $total_rounds && $mode === 'dynamic') {
+            echo json_encode(["action" => "next", "vote" => true]);
+            exit;
+        }
+        quiz_safe_update(
+            "UPDATE games SET status='finished', round_ends_at=NULL, vote_ends_at=NULL WHERE id=$game_id",
+            "UPDATE games SET status='finished' WHERE id=$game_id"
+        );
+        echo json_encode(["action" => "finish"]);
+        exit;
+    }
+
+    // policz graczy
+    $resPlayers = mysqli_query($conn,
+        "SELECT COUNT(*) AS c FROM players WHERE game_id=$game_id"
+    );
+    $prow = $resPlayers ? mysqli_fetch_assoc($resPlayers) : null;
+    $total_players = (int)($prow['c'] ?? 0);
+
+    // policz odpowiedzi na to pytanie
+    $resAns = mysqli_query($conn,
+        "SELECT COUNT(*) AS c FROM answers WHERE game_id=$game_id AND question_id=$question_id"
+    );
+    $arow = $resAns ? mysqli_fetch_assoc($resAns) : null;
+    $answers_count = (int)($arow['c'] ?? 0);
+
+    // Deadline rundy – jeżeli istnieje
+    $roundEndsAt = $game['round_ends_at'] ?? null;
+    $time_left_server = null;
+    $expired = false;
+    if (!empty($roundEndsAt)) {
+        $endsTs = strtotime($roundEndsAt);
+        if ($endsTs !== false) {
+            $diff = $endsTs - time();
+            $time_left_server = max(0, (int)$diff);
+            $expired = ($diff <= 0);
+        }
+    }
+
+    // Jeżeli czas minął, a nie wszyscy odpowiedzieli – dopisz brakujące odpowiedzi jako timeout
+    if ($expired && $total_players > 0 && $answers_count < $total_players) {
+
+        $missing = [];
+        $mres = mysqli_query($conn,
+            "SELECT p.id AS player_id
+             FROM players p
+             LEFT JOIN answers a
+               ON a.game_id=p.game_id AND a.question_id=$question_id AND a.player_id=p.id
+             WHERE p.game_id=$game_id AND a.id IS NULL"
+        );
+        if ($mres) {
+            while ($mr = mysqli_fetch_assoc($mres)) {
+                $missing[] = (int)$mr['player_id'];
+            }
+        }
+
+        if (!empty($missing)) {
+            $stmtIns = mysqli_prepare($conn,
+                "INSERT INTO answers (game_id, player_id, question_id, answer, is_correct, time_left)
+                 VALUES (?, ?, ?, NULL, 0, 0)"
+            );
+            foreach ($missing as $pid) {
+                mysqli_stmt_bind_param($stmtIns, "iii", $game_id, $pid, $question_id);
+                @mysqli_stmt_execute($stmtIns);
+            }
+            mysqli_stmt_close($stmtIns);
+        }
+
+        // przelicz po dopisaniu
+        $resAns2 = mysqli_query($conn,
+            "SELECT COUNT(*) AS c FROM answers WHERE game_id=$game_id AND question_id=$question_id"
+        );
+        $arow2 = $resAns2 ? mysqli_fetch_assoc($resAns2) : null;
+        $answers_count = (int)($arow2['c'] ?? 0);
+    }
+
+    // Jeszcze czekamy
+    if ($total_players > 0 && $answers_count < $total_players && !$expired) {
+        echo json_encode([
+            "action" => "wait",
+            "answered" => $answers_count,
+            "total" => $total_players,
+            "time_left" => $time_left_server
+        ]);
+        exit;
+    }
+
+    // Wszyscy odpowiedzieli lub czas minął → przechodzimy dalej
+    if ($current_round >= $total_rounds) {
+        quiz_safe_update(
+            "UPDATE games SET status='finished', round_ends_at=NULL, vote_ends_at=NULL WHERE id=$game_id",
+            "UPDATE games SET status='finished' WHERE id=$game_id"
+        );
+        echo json_encode(["action" => "finish"]);
+        exit;
+    }
+
+    $next_round = $current_round + 1;
+
+    // W trybie dynamicznym przejście na rundę, która nie ma jeszcze pytania, oznacza wejście w fazę głosowania.
+    if ($mode === 'dynamic') {
+        $qNextRes = mysqli_query($conn,
+            "SELECT 1 FROM game_questions WHERE game_id=$game_id AND round_number=$next_round LIMIT 1"
+        );
+        $hasNextQuestion = ($qNextRes && mysqli_fetch_assoc($qNextRes)) ? true : false;
+
+        if (!$hasNextQuestion) {
+            $sqlWith = "UPDATE games
+                        SET current_round=$next_round,
+                            vote_ends_at = DATE_ADD(NOW(), INTERVAL time_per_question SECOND),
+                            round_ends_at = NULL
+                        WHERE id=$game_id";
+            $sqlFallback = "UPDATE games SET current_round=$next_round WHERE id=$game_id";
+            quiz_safe_update($sqlWith, $sqlFallback);
+
+            echo json_encode(["action" => "next", "vote" => true]);
+            exit;
+        }
+    }
+
+    $sqlWith = "UPDATE games
+                SET current_round=$next_round,
+                    round_ends_at = DATE_ADD(NOW(), INTERVAL time_per_question SECOND),
+                    vote_ends_at = NULL
+                WHERE id=$game_id";
+
+    $sqlFallback = "UPDATE games SET current_round=$next_round WHERE id=$game_id";
+
+    quiz_safe_update($sqlWith, $sqlFallback);
+
+    echo json_encode(["action" => "next"]);
+    exit;
+
+} finally {
+    quiz_release_lock($lockKey);
 }
