@@ -228,6 +228,8 @@ function pollVote() {
                 setTimeout(pollVote, 2000);
             } else if (data.action === 'start') {
                 window.location = 'game.php?game=' + gameId;
+            } else if (data.action === 'finish') {
+                window.location = 'finish.php?game=' + gameId;
             } else {
                 setTimeout(pollVote, 2000);
             }

@@ -127,5 +127,19 @@ if (!$ok) {
     exit;
 }
 
+// Punkty – zapisujemy w players.score, aby wyniki i ranking były spójne.
+// Liczenie jak w finish.php: 100 + time_left*10 za poprawną odpowiedź.
+if ($is_correct === 1) {
+    $earned_points = 100 + ($time_left * 10);
+    $stmtUpd = mysqli_prepare($conn,
+        "UPDATE players SET score = score + ? WHERE id = ? AND game_id = ?"
+    );
+    if ($stmtUpd) {
+        mysqli_stmt_bind_param($stmtUpd, "iii", $earned_points, $player_id, $game_id);
+        @mysqli_stmt_execute($stmtUpd);
+        mysqli_stmt_close($stmtUpd);
+    }
+}
+
 echo json_encode(["ok" => true, "is_correct" => $is_correct]);
 exit;

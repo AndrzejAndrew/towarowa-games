@@ -289,6 +289,12 @@ function pollNext() {
         .then(r => r.json())
         .then(data => {
             if (data.action === 'wait') {
+                // Jeśli serwer oznaczył grę jako finished, a my jeszcze pollujemy,
+                // przechodzimy od razu do wyników (np. gdy inny klient pierwszy zakończył grę).
+                if (data.status === 'finished') {
+                    window.location = 'finish.php?game=' + gameId;
+                    return;
+                }
                 const a = (data.answered !== undefined && data.total !== undefined)
                     ? `Odpowiedzi: ${data.answered}/${data.total}`
                     : 'Czekamy na pozostałych graczy...';
@@ -298,6 +304,8 @@ function pollNext() {
                 window.location = 'game.php?game=' + gameId;
             } else if (data.action === 'finish') {
                 window.location = 'finish.php?game=' + gameId;
+            } else if (data.action === 'lobby') {
+                window.location = 'lobby.php?game=' + gameId;
             } else {
                 // error/busy
                 setTimeout(pollNext, 2000);

@@ -70,8 +70,20 @@ try {
         exit;
     }
 
-    if (($game['status'] ?? '') !== 'running') {
-        echo json_encode(["action" => "wait", "status" => $game['status']]);
+    // Statusy inne niż "running" muszą być obsłużone jawnie.
+    // Jeśli ktoś zakończył grę, a inny gracz jeszcze polluje next.php,
+    // nie możemy zwrócić "wait" – inaczej zostanie na ekranie pytania bez końca.
+    $status = (string)($game['status'] ?? '');
+    if ($status === 'finished') {
+        echo json_encode(["action" => "finish"]);
+        exit;
+    }
+    if ($status === 'lobby') {
+        echo json_encode(["action" => "lobby"]);
+        exit;
+    }
+    if ($status !== 'running') {
+        echo json_encode(["action" => "wait", "status" => $status]);
         exit;
     }
 

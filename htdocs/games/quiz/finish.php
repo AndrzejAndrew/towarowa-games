@@ -21,6 +21,24 @@ if (!$game) {
 }
 $already_notified = (int)($game['discord_finish_sent'] ?? 0);
 
+// Upewnij się, że scores w tabeli players są policzone.
+// W poprzednich wersjach quizu punkty były wyświetlane z players.score,
+// ale nie zawsze były aktualizowane w trakcie gry (np. tryb dynamiczny).
+// Przeliczamy score na podstawie tabeli answers. Operacja jest idempotentna.
+$scoreSql = "
+    UPDATE players p
+    LEFT JOIN (
+        SELECT player_id,
+               SUM(CASE WHEN is_correct=1 THEN (100 + IFNULL(time_left,0)*10) ELSE 0 END) AS s
+        FROM answers
+        WHERE game_id = $game_id
+        GROUP BY player_id
+    ) x ON x.player_id = p.id
+    SET p.score = IFNULL(x.s, 0)
+    WHERE p.game_id = $game_id
+";
+@mysqli_query($conn, $scoreSql);
+
 // gracze
 $res = mysqli_query($conn,
     "SELECT id, user_id, nickname, score, is_guest
