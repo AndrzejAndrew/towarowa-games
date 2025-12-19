@@ -5,6 +5,7 @@ require_once __DIR__ . '/../../includes/auth.php';
 header("Content-Type: application/json");
 
 $game_id = (int)($_GET['game'] ?? 0);
+$client_round = (int)($_GET['round'] ?? 0);
 if ($game_id <= 0) {
     echo json_encode(["action" => "error", "msg" => "Brak ID gry"]);
     exit;
@@ -78,6 +79,31 @@ try {
     $total_rounds    = (int)$game['total_rounds'];
     $timePerQuestion = (int)$game['time_per_question'];
     $mode            = $game['mode'] ?? 'classic';
+
+    // Jeśli klient jest na innej rundzie niż serwer, nie czekamy.
+    // To zabezpiecza przed sytuacją, w której jeden klient "przegapi" odpowiedź "next"
+    // (np. bo ktoś inny już zdążył przesunąć current_round) i zostaje na starym pytaniu.
+    if ($client_round > 0 && $client_round !== $current_round) {
+        // jeśli gra jest już zakończona lub przekroczono total_rounds
+        if (($game['status'] ?? '') === 'finished' || ($total_rounds > 0 && $current_round > $total_rounds)) {
+            echo json_encode(["action" => "finish", "server_round" => $current_round]);
+            exit;
+        }
+
+        if ($mode === 'dynamic') {
+            $qCurRes = mysqli_query($conn,
+                "SELECT 1 FROM game_questions WHERE game_id=$game_id AND round_number=$current_round LIMIT 1"
+            );
+            $hasCurQuestion = ($qCurRes && mysqli_fetch_assoc($qCurRes)) ? true : false;
+            if (!$hasCurQuestion) {
+                echo json_encode(["action" => "next", "vote" => true, "server_round" => $current_round]);
+                exit;
+            }
+        }
+
+        echo json_encode(["action" => "next", "server_round" => $current_round]);
+        exit;
+    }
 
     // Jeśli gra już przekroczyła total_rounds – zakończ
     if ($total_rounds > 0 && $current_round > $total_rounds) {
