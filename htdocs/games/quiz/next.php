@@ -51,9 +51,17 @@ if (!quiz_get_lock($lockKey, 0)) {
 try {
     // pobierz stan gry
     $res = mysqli_query($conn,
-        "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at
+        "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at,
+                IF(round_ends_at IS NULL, NULL, GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), round_ends_at))) AS round_time_left
          FROM games WHERE id = $game_id LIMIT 1"
     );
+    if (!$res && mysqli_errno($conn) === 1054) {
+        // fallback dla starszej bazy bez round_ends_at
+        $res = mysqli_query($conn,
+            "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at
+             FROM games WHERE id = $game_id LIMIT 1"
+        );
+    }
     $game = $res ? mysqli_fetch_assoc($res) : null;
 
     if (!$game) {
@@ -117,17 +125,12 @@ try {
     $arow = $resAns ? mysqli_fetch_assoc($resAns) : null;
     $answers_count = (int)($arow['c'] ?? 0);
 
-    // Deadline rundy – jeżeli istnieje
-    $roundEndsAt = $game['round_ends_at'] ?? null;
+    // Deadline rundy – liczymy po stronie MySQL (unika błędów stref czasowych DATETIME)
     $time_left_server = null;
     $expired = false;
-    if (!empty($roundEndsAt)) {
-        $endsTs = strtotime($roundEndsAt);
-        if ($endsTs !== false) {
-            $diff = $endsTs - time();
-            $time_left_server = max(0, (int)$diff);
-            $expired = ($diff <= 0);
-        }
+    if (is_array($game) && array_key_exists('round_time_left', $game) && $game['round_time_left'] !== null) {
+        $time_left_server = (int)$game['round_time_left'];
+        $expired = ($time_left_server <= 0);
     }
 
     // Jeżeli czas minął, a nie wszyscy odpowiedzieli – dopisz brakujące odpowiedzi jako timeout
