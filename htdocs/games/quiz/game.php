@@ -10,10 +10,18 @@ if ($game_id <= 0) {
 
 // pobierz grę
 $gameRes = mysqli_query($conn,
-    "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at
+    "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at,
+            IF(round_ends_at IS NULL, NULL, GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), round_ends_at))) AS round_time_left
      FROM games WHERE id = $game_id LIMIT 1"
 );
-$game = mysqli_fetch_assoc($gameRes);
+if (!$gameRes && mysqli_errno($conn) === 1054) {
+    // fallback dla starszej bazy bez round_ends_at / TIMESTAMPDIFF
+    $gameRes = mysqli_query($conn,
+        "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at
+         FROM games WHERE id = $game_id LIMIT 1"
+    );
+}
+$game = $gameRes ? mysqli_fetch_assoc($gameRes) : null;
 
 if (!$game) {
     die("Nie ma takiej gry.");
@@ -102,19 +110,12 @@ if ($arow) {
     $my_time_left_at_answer = (int)($arow['time_left'] ?? 0);
 }
 
-// czas do końca rundy wg serwera (jeśli migracja jeszcze nie wykonana – fallback do pełnego time_per_question)
-$roundEndsAt = $game['round_ends_at'] ?? null;
+// czas do końca rundy wg serwera (bez pułapki stref czasowych – liczone po stronie MySQL)
 $timeLeftInitial = $time_per_q;
-$roundEndsTs = null;
-if (!empty($roundEndsAt)) {
-    $ts = strtotime($roundEndsAt);
-    if ($ts !== false) {
-        $roundEndsTs = $ts;
-        $timeLeftInitial = max(0, $ts - time());
-        // sanity: nie pokazuj więcej niż time_per_q
-        if ($timeLeftInitial > $time_per_q) {
-            $timeLeftInitial = $time_per_q;
-        }
+if (is_array($game) && array_key_exists('round_time_left', $game) && $game['round_time_left'] !== null) {
+    $timeLeftInitial = (int)$game['round_time_left'];
+    if ($timeLeftInitial > $time_per_q) {
+        $timeLeftInitial = $time_per_q;
     }
 }
 

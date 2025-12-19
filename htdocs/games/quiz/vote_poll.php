@@ -40,9 +40,17 @@ function quiz_try_game_update(string $sql_with_timers, string $sql_fallback): bo
 
 // pobierz grę
 $gRes = mysqli_query($conn,
-    "SELECT id, status, mode, current_round, total_rounds, time_per_question, vote_ends_at
+    "SELECT id, status, mode, current_round, total_rounds, time_per_question, vote_ends_at,
+            IF(vote_ends_at IS NULL, NULL, GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), vote_ends_at))) AS vote_time_left
      FROM games WHERE id=$game_id LIMIT 1"
 );
+if (!$gRes && mysqli_errno($conn) === 1054) {
+    // fallback dla starszej bazy bez vote_ends_at
+    $gRes = mysqli_query($conn,
+        "SELECT id, status, mode, current_round, total_rounds, time_per_question, vote_ends_at
+         FROM games WHERE id=$game_id LIMIT 1"
+    );
+}
 $game = $gRes ? mysqli_fetch_assoc($gRes) : null;
 if (!$game) {
     echo json_encode(["action" => "error", "msg" => "Gra nie istnieje"]);
@@ -97,15 +105,25 @@ if ($assigned > 0) {
     exit;
 }
 
-// czas do końca głosowania wg serwera (jeśli brak kolumny/migracji: null)
+// czas do końca głosowania wg serwera (liczone w MySQL, aby uniknąć różnic stref czasowych)
 $time_left = null;
 $expired = false;
+
 if (!empty($game['vote_ends_at'])) {
-    $ts = strtotime($game['vote_ends_at']);
-    if ($ts !== false) {
-        $time_left = max(0, $ts - time());
-        $expired = ($time_left <= 0);
+    if (is_array($game) && array_key_exists('vote_time_left', $game) && $game['vote_time_left'] !== null) {
+        $time_left = (int)$game['vote_time_left'];
+    } else {
+        // fallback: wylicz po stronie MySQL na podstawie vote_ends_at
+        $tlRes = mysqli_query($conn,
+            "SELECT GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), vote_ends_at)) AS t
+             FROM games WHERE id=$game_id LIMIT 1"
+        );
+        $tlRow = $tlRes ? mysqli_fetch_assoc($tlRes) : null;
+        if ($tlRow && $tlRow['t'] !== null) {
+            $time_left = (int)$tlRow['t'];
+        }
     }
+    $expired = ($time_left !== null && $time_left <= 0);
 }
 
 $should_finalize = ($total_players > 0 && $votes_count >= $total_players) || $expired;

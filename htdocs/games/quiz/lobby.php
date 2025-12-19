@@ -22,12 +22,11 @@ mysqli_stmt_close($stmt);
 
 if (!$game) {
     die("Nie znaleziono gry.");
-
 }
 
 // ustal aktualnego playera (zalogowany lub gość)
 if (is_logged_in()) {
-    $uid = (int)($_SESSION['user_id'] ?? 0);
+    $uid = (int)$_SESSION['user_id'];
     $stmt = mysqli_prepare($conn,
         "SELECT id, nickname, score FROM players WHERE game_id = ? AND user_id = ?"
     );
@@ -44,11 +43,10 @@ $res = mysqli_stmt_get_result($stmt);
 $player = mysqli_fetch_assoc($res);
 mysqli_stmt_close($stmt);
 
-// Jeśli ktoś wszedł w lobby bez dołączenia (np. z linku lobby), przerzuć go na join link.
 if (!$player) {
-    header("Location: join_game.php?code=" . urlencode($code));
-    exit;
+    die("Nie jesteś uczestnikiem tej gry.");
 }
+
 $player_id = (int)$player['id'];
 $is_owner = ($player_id === (int)$game['owner_player_id']);
 $code = $game['code'];
@@ -136,7 +134,16 @@ function refreshPlayers() {
                 list.appendChild(li);
             });
             if (data.status === "running") {
-                window.location.href = "game.php?game=<?php echo $game_id; ?>";
+                const mode = data.mode || "<?php echo htmlspecialchars($game['mode'] ?? 'classic'); ?>";
+                const hasQuestion = (typeof data.has_question !== 'undefined')
+                    ? (data.has_question === true || data.has_question === 1 || data.has_question === "1")
+                    : true;
+
+                if (mode === "dynamic" && !hasQuestion) {
+                    window.location.href = "vote.php?game=<?php echo $game_id; ?>";
+                } else {
+                    window.location.href = "game.php?game=<?php echo $game_id; ?>";
+                }
             } else if (data.status === "finished") {
                 window.location.href = "finish.php?game=<?php echo $game_id; ?>";
             }

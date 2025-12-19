@@ -10,10 +10,18 @@ if ($game_id <= 0) {
 
 // pobierz grę
 $gameRes = mysqli_query($conn,
-    "SELECT id, status, mode, current_round, total_rounds, time_per_question, vote_ends_at, owner_player_id
+    "SELECT id, status, mode, current_round, total_rounds, time_per_question, vote_ends_at, owner_player_id,
+            IF(vote_ends_at IS NULL, NULL, GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), vote_ends_at))) AS vote_time_left
      FROM games WHERE id = $game_id LIMIT 1"
 );
-$game = mysqli_fetch_assoc($gameRes);
+if (!$gameRes && mysqli_errno($conn) === 1054) {
+    // fallback dla starszej bazy bez vote_ends_at
+    $gameRes = mysqli_query($conn,
+        "SELECT id, status, mode, current_round, total_rounds, time_per_question, vote_ends_at, owner_player_id
+         FROM games WHERE id = $game_id LIMIT 1"
+    );
+}
+$game = $gameRes ? mysqli_fetch_assoc($gameRes) : null;
 if (!$game) {
     die("Nie ma takiej gry.");
 }
@@ -53,6 +61,7 @@ if (is_logged_in()) {
     );
     mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
 }
+
 mysqli_stmt_execute($stmt);
 $res2 = mysqli_stmt_get_result($stmt);
 $player = mysqli_fetch_assoc($res2);
@@ -106,10 +115,22 @@ if (empty($voteEndsAt)) {
 }
 
 $voteTimeLeftInitial = $time_per_q;
-if (!empty($voteEndsAt)) {
-    $ts = strtotime($voteEndsAt);
-    if ($ts !== false) {
-        $voteTimeLeftInitial = max(0, $ts - time());
+
+// Jeżeli mamy vote_time_left z MySQL – użyj go (unika błędów stref czasowych DATETIME)
+if (is_array($game) && array_key_exists('vote_time_left', $game) && $game['vote_time_left'] !== null) {
+    $voteTimeLeftInitial = (int)$game['vote_time_left'];
+    if ($voteTimeLeftInitial > $time_per_q) {
+        $voteTimeLeftInitial = $time_per_q;
+    }
+} elseif (!empty($voteEndsAt)) {
+    // fallback: przelicz po stronie MySQL na podstawie vote_ends_at
+    $tlRes = mysqli_query($conn,
+        "SELECT GREATEST(0, TIMESTAMPDIFF(SECOND, NOW(), vote_ends_at)) AS t
+         FROM games WHERE id = $game_id LIMIT 1"
+    );
+    $tlRow = $tlRes ? mysqli_fetch_assoc($tlRes) : null;
+    if ($tlRow && $tlRow['t'] !== null) {
+        $voteTimeLeftInitial = (int)$tlRow['t'];
         if ($voteTimeLeftInitial > $time_per_q) {
             $voteTimeLeftInitial = $time_per_q;
         }

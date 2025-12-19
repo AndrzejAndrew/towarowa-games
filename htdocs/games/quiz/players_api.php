@@ -9,28 +9,42 @@ if ($game_id <= 0) {
     exit;
 }
 
+// Pobierz status + tryb + aktualną rundę i sprawdź czy runda ma przypisane pytanie.
+// (W trybie dynamicznym, gdy status=running i has_question=0, klient powinien trafić na vote.php zamiast game.php.)
 $res = mysqli_query($conn,
-    "SELECT status FROM games WHERE id = $game_id"
+    "SELECT g.status, g.mode, g.current_round, g.total_rounds,\n            (SELECT 1 FROM game_questions gq WHERE gq.game_id=g.id AND gq.round_number=g.current_round LIMIT 1) AS has_question\n     FROM games g\n     WHERE g.id = $game_id\n     LIMIT 1"
 );
-$game = mysqli_fetch_assoc($res);
+$game = $res ? mysqli_fetch_assoc($res) : null;
 if (!$game) {
     echo json_encode(['error' => 'no_game']);
     exit;
 }
-$status = $game['status'];
+
+$status = $game['status'] ?? 'lobby';
+$mode = $game['mode'] ?? 'classic';
+$current_round = (int)($game['current_round'] ?? 1);
+$total_rounds = (int)($game['total_rounds'] ?? 0);
+$has_question = !empty($game['has_question']) ? 1 : 0;
 
 $res = mysqli_query($conn,
-    "SELECT nickname, score FROM players WHERE game_id = $game_id ORDER BY id ASC"
+    "SELECT nickname, score\n     FROM players\n     WHERE game_id = $game_id\n     ORDER BY id ASC"
 );
+
 $players = [];
-while ($row = mysqli_fetch_assoc($res)) {
-    $players[] = [
-        'nickname' => $row['nickname'],
-        'score' => (int)$row['score']
-    ];
+if ($res) {
+    while ($row = mysqli_fetch_assoc($res)) {
+        $players[] = [
+            'nickname' => $row['nickname'],
+            'score' => (int)$row['score']
+        ];
+    }
 }
 
 echo json_encode([
     'status' => $status,
+    'mode' => $mode,
+    'current_round' => $current_round,
+    'total_rounds' => $total_rounds,
+    'has_question' => $has_question,
     'players' => $players
 ]);
