@@ -22,39 +22,33 @@ mysqli_stmt_close($stmt);
 
 if (!$game) {
     die("Nie znaleziono gry.");
+
 }
 
 // ustal aktualnego playera (zalogowany lub gość)
 if (is_logged_in()) {
-    $uid = (int)$_SESSION['user_id'];
+    $uid = (int)($_SESSION['user_id'] ?? 0);
     $stmt = mysqli_prepare($conn,
         "SELECT id, nickname, score FROM players WHERE game_id = ? AND user_id = ?"
     );
     mysqli_stmt_bind_param($stmt, "ii", $game_id, $uid);
 } else {
-    $guest_id = (int)($_SESSION['guest_id'] ?? 0);
-    if ($guest_id > 0) {
-        $stmt = mysqli_prepare($conn,
-            "SELECT id, nickname, score FROM players WHERE game_id = ? AND is_guest = 1 AND guest_id = ?"
-        );
-        mysqli_stmt_bind_param($stmt, "ii", $game_id, $guest_id);
-    } else {
-        $nickname = $_SESSION['guest_name'] ?? 'Gość';
-        $stmt = mysqli_prepare($conn,
-            "SELECT id, nickname, score FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
-        );
-        mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
-    }
+    $nickname = $_SESSION['guest_name'] ?? 'Gość';
+    $stmt = mysqli_prepare($conn,
+        "SELECT id, nickname, score FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
+    );
+    mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
 }
 mysqli_stmt_execute($stmt);
 $res = mysqli_stmt_get_result($stmt);
 $player = mysqli_fetch_assoc($res);
 mysqli_stmt_close($stmt);
 
+// Jeśli ktoś wszedł w lobby bez dołączenia (np. z linku lobby), przerzuć go na join link.
 if (!$player) {
-    die("Nie jesteś uczestnikiem tej gry.");
+    header("Location: join_game.php?code=" . urlencode($code));
+    exit;
 }
-
 $player_id = (int)$player['id'];
 $is_owner = ($player_id === (int)$game['owner_player_id']);
 $code = $game['code'];

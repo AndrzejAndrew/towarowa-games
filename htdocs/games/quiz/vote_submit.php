@@ -43,21 +43,12 @@ if (is_logged_in()) {
     );
     mysqli_stmt_bind_param($stmt, "ii", $game_id, $uid);
 } else {
-    $guest_id = (int)($_SESSION['guest_id'] ?? 0);
-    if ($guest_id > 0) {
-        $stmt = mysqli_prepare($conn,
-            "SELECT id FROM players WHERE game_id=? AND is_guest=1 AND guest_id=?"
-        );
-        mysqli_stmt_bind_param($stmt, "ii", $game_id, $guest_id);
-    } else {
-        $nickname = $_SESSION['guest_name'] ?? 'Gość';
-        $stmt = mysqli_prepare($conn,
-            "SELECT id FROM players WHERE game_id=? AND is_guest=1 AND nickname=?"
-        );
-        mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
-    }
+    $nickname = $_SESSION['guest_name'] ?? 'Gość';
+    $stmt = mysqli_prepare($conn,
+        "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
+    );
+    mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
 }
-
 mysqli_stmt_execute($stmt);
 $res2 = mysqli_stmt_get_result($stmt);
 $player = mysqli_fetch_assoc($res2);
