@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/auth.php';
+require_once __DIR__ . '/../../includes/header.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header("Location: index.php");
@@ -12,145 +13,203 @@ if ($game_id <= 0) {
     die("Brak ID gry.");
 }
 
-$res = mysqli_query($conn,
-    "SELECT code, total_rounds, current_round, mode, owner_player_id
-     FROM games WHERE id = $game_id"
-);
-$game = mysqli_fetch_assoc($res);
-if (!$game) {
-    die("Nie ma takiej gry.");
+function quiz_get_lock(string $key, int $timeoutSeconds = 0): bool
+{
+    global $conn;
+    $k = mysqli_real_escape_string($conn, $key);
+    $r = mysqli_query($conn, "SELECT GET_LOCK('$k', " . (int)$timeoutSeconds . ") AS l");
+    $row = $r ? mysqli_fetch_assoc($r) : null;
+    return isset($row['l']) && (int)$row['l'] === 1;
 }
-if ($game['mode'] !== 'dynamic') {
+function quiz_release_lock(string $key): void
+{
+    global $conn;
+    $k = mysqli_real_escape_string($conn, $key);
+    @mysqli_query($conn, "SELECT RELEASE_LOCK('$k')");
+}
+function quiz_try_game_update(string $sql_with_timers, string $sql_fallback): void
+{
+    global $conn;
+    if (mysqli_query($conn, $sql_with_timers)) return;
+    if (mysqli_errno($conn) === 1054) {
+        mysqli_query($conn, $sql_fallback);
+    }
+}
+
+// pobierz grę
+$gRes = mysqli_query($conn,
+    "SELECT owner_player_id, current_round, total_rounds, time_per_question, mode, status
+     FROM games WHERE id=$game_id LIMIT 1"
+);
+$game = $gRes ? mysqli_fetch_assoc($gRes) : null;
+if (!$game) {
+    die("Gra nie istnieje.");
+}
+
+if (($game['mode'] ?? 'classic') !== 'dynamic') {
     header("Location: game.php?game=" . $game_id);
     exit;
 }
 
-// sprawdź, czy to gospodarz
-$is_guest = is_logged_in() ? 0 : 1;
+if (($game['status'] ?? '') !== 'running') {
+    header("Location: lobby.php?game=" . $game_id);
+    exit;
+}
+
+// tylko host
+$owner_player_id = (int)$game['owner_player_id'];
+// ustal playera
 if (is_logged_in()) {
     $uid = (int)$_SESSION['user_id'];
-    $stmt = mysqli_prepare($conn,
-        "SELECT id FROM players WHERE game_id = ? AND user_id = ?"
-    );
+    $stmt = mysqli_prepare($conn, "SELECT id FROM players WHERE game_id=? AND user_id=?");
     mysqli_stmt_bind_param($stmt, "ii", $game_id, $uid);
 } else {
-    $nickname = $_SESSION['guest_name'] ?? 'Gość';
-    $stmt = mysqli_prepare($conn,
-        "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
-    );
-    mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
+    $guest_id = (int)($_SESSION['guest_id'] ?? 0);
+    if ($guest_id > 0) {
+        $stmt = mysqli_prepare($conn, "SELECT id FROM players WHERE game_id=? AND is_guest=1 AND guest_id=?");
+        mysqli_stmt_bind_param($stmt, "ii", $game_id, $guest_id);
+    } else {
+        $nickname = $_SESSION['guest_name'] ?? 'Gość';
+        $stmt = mysqli_prepare($conn, "SELECT id FROM players WHERE game_id=? AND is_guest=1 AND nickname=?");
+        mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
+    }
 }
 mysqli_stmt_execute($stmt);
 $res2 = mysqli_stmt_get_result($stmt);
 $player = mysqli_fetch_assoc($res2);
 mysqli_stmt_close($stmt);
 
-if (!$player || (int)$player['id'] !== (int)$game['owner_player_id']) {
-    die("Tylko gospodarz może zakończyć głosowanie.");
+if (!$player || (int)$player['id'] !== $owner_player_id) {
+    die("Tylko twórca gry może zakończyć głosowanie ręcznie.");
 }
 
 $current_round = (int)$game['current_round'];
-$total_rounds  = (int)$game['total_rounds'];
+$vote_round = (int)floor(($current_round - 1) / 5) + 1;
+$lockKey = "quiz_vote_{$game_id}_{$vote_round}";
 
-// wyliczamy numer tury głosowania
-$vote_round = (int)floor(($current_round) / 5) + 1;
-if ($current_round === 0) $vote_round = 1;
-
-// policz głosy
-$res = mysqli_query($conn,
-    "SELECT category, COUNT(*) AS c
-     FROM votes
-     WHERE game_id = $game_id AND round_number = $vote_round
-     GROUP BY category
-     ORDER BY c DESC"
-);
-$winner_cat = null;
-$max_c = 0;
-$winners = [];
-while ($row = mysqli_fetch_assoc($res)) {
-    if ($row['c'] > $max_c) {
-        $max_c = $row['c'];
-        $winners = [$row['category']];
-    } elseif ($row['c'] === $max_c) {
-        $winners[] = $row['category'];
-    }
+if (!quiz_get_lock($lockKey, 2)) {
+    die("Trwa finalizacja głosowania, spróbuj ponownie.");
 }
 
-if (empty($winners)) {
-    // nikt nie zagłosował – awaryjnie losujemy kategorię z bazy
-    $res2 = mysqli_query($conn,
-        "SELECT DISTINCT category
-         FROM questions
-         WHERE category <> ''
-         ORDER BY RAND()
+try {
+    // czy już przypisane?
+    $assignedRes = mysqli_query($conn,
+        "SELECT COUNT(*) AS c FROM game_questions WHERE game_id=$game_id AND round_number=$current_round"
+    );
+    $assigned = (int)(mysqli_fetch_assoc($assignedRes)['c'] ?? 0);
+    if ($assigned > 0) {
+        header("Location: game.php?game=" . $game_id);
+        exit;
+    }
+
+    // zwycięska kategoria
+    $topRes = mysqli_query($conn,
+        "SELECT category, COUNT(*) AS cnt
+         FROM votes
+         WHERE game_id=$game_id AND round_number=$vote_round
+         GROUP BY category
+         ORDER BY cnt DESC
          LIMIT 1"
     );
-    $row2 = mysqli_fetch_assoc($res2);
-    if (!$row2) {
-        die("Brak kategorii i pytań w bazie.");
+    $topRow = $topRes ? mysqli_fetch_assoc($topRes) : null;
+    $winner_cat = $topRow['category'] ?? null;
+
+    if ($winner_cat === null) {
+        $seed = (int)($game_id * 1000 + $vote_round * 17);
+        $randCatRes = mysqli_query($conn, "SELECT DISTINCT category FROM questions ORDER BY RAND($seed) LIMIT 1");
+        $rc = $randCatRes ? mysqli_fetch_assoc($randCatRes) : null;
+        $winner_cat = $rc['category'] ?? null;
     }
-    $winner_cat = $row2['category'];
-} else {
-    // jeśli kilka z takim samym wynikiem – losujemy jedną z nich
-    $winner_cat = $winners[array_rand($winners)];
-}
 
-// obliczamy ile pytań mamy w tej turze (maks 5, ale może być mniej na końcu gry)
-$questions_per_round = 5;
-$remaining = $total_rounds - $current_round + 1;
-$to_assign = min($questions_per_round, $remaining);
+    if ($winner_cat === null) {
+        die("Brak kategorii.");
+    }
 
-// zbierz już użyte pytania w tej grze, żeby ich nie powtarzać
-$used = [];
-$resu = mysqli_query($conn,
-    "SELECT question_id FROM game_questions WHERE game_id = $game_id"
-);
-while ($r = mysqli_fetch_assoc($resu)) {
-    $used[] = (int)$r['question_id'];
-}
-$used_list = '';
-if (!empty($used)) {
-    $used_list = implode(',', $used);
-}
-
-// losujemy pytania z kategorii zwycięskiej
-$winner_cat_esc = mysqli_real_escape_string($conn, $winner_cat);
-
-$sql = "
-    SELECT id FROM questions
-    WHERE category = '$winner_cat_esc'
-";
-if ($used_list !== '') {
-    $sql .= " AND id NOT IN ($used_list)";
-}
-$sql .= " ORDER BY RAND() LIMIT $to_assign";
-
-$resq = mysqli_query($conn, $sql);
-
-$round_num = $current_round;
-while ($q = mysqli_fetch_assoc($resq)) {
-    $qid = (int)$q['id'];
-    mysqli_query($conn,
-        "INSERT INTO game_questions (game_id, question_id, round_number)
-         VALUES ($game_id, $qid, $round_num)"
+    // użyte pytania
+    $usedIds = [];
+    $usedRes = mysqli_query($conn,
+        "SELECT DISTINCT question_id FROM game_questions WHERE game_id=$game_id"
     );
-    $round_num++;
+    if ($usedRes) {
+        while ($u = mysqli_fetch_assoc($usedRes)) {
+            $usedIds[] = (int)$u['question_id'];
+        }
+    }
+
+    $total_rounds = (int)$game['total_rounds'];
+    $to_assign = 5;
+    $remaining = $total_rounds - $current_round + 1;
+    if ($remaining < $to_assign) {
+        $to_assign = max(0, $remaining);
+    }
+
+    if ($to_assign <= 0) {
+        quiz_try_game_update(
+            "UPDATE games SET status='finished', vote_ends_at=NULL, round_ends_at=NULL WHERE id=$game_id",
+            "UPDATE games SET status='finished' WHERE id=$game_id"
+        );
+        header("Location: finish.php?game=" . $game_id);
+        exit;
+    }
+
+    $notIn = '';
+    if (count($usedIds) > 0) {
+        $notIn = "AND id NOT IN (" . implode(',', $usedIds) . ")";
+    }
+
+    $seedQ = (int)($game_id * 100000 + $vote_round * 313);
+    $qSql = "SELECT id FROM questions WHERE category='" . mysqli_real_escape_string($conn, $winner_cat) . "' $notIn ORDER BY RAND($seedQ) LIMIT $to_assign";
+    $qRes = mysqli_query($conn, $qSql);
+    $qIds = [];
+    if ($qRes) {
+        while ($qr = mysqli_fetch_assoc($qRes)) {
+            $qIds[] = (int)$qr['id'];
+        }
+    }
+
+    if (count($qIds) < $to_assign) {
+        $need = $to_assign - count($qIds);
+        $seedQ2 = (int)($seedQ + 7);
+        $qSql2 = "SELECT id FROM questions WHERE category='" . mysqli_real_escape_string($conn, $winner_cat) . "' ORDER BY RAND($seedQ2) LIMIT $need";
+        $qRes2 = mysqli_query($conn, $qSql2);
+        if ($qRes2) {
+            while ($qr = mysqli_fetch_assoc($qRes2)) {
+                $qid = (int)$qr['id'];
+                if (!in_array($qid, $qIds, true)) {
+                    $qIds[] = $qid;
+                }
+            }
+        }
+    }
+
+    if (count($qIds) === 0) {
+        die("Brak pytań w tej kategorii.");
+    }
+
+    $ins = mysqli_prepare($conn, "INSERT INTO game_questions (game_id, question_id, round_number) VALUES (?, ?, ?)");
+    $rnum = $current_round;
+    foreach ($qIds as $qid) {
+        $gid = $game_id;
+        $qid2 = (int)$qid;
+        $rn = (int)$rnum;
+        mysqli_stmt_bind_param($ins, "iii", $gid, $qid2, $rn);
+        mysqli_stmt_execute($ins);
+        $rnum++;
+    }
+    mysqli_stmt_close($ins);
+
+    // czyść głosy
+    mysqli_query($conn, "DELETE FROM votes WHERE game_id=$game_id AND round_number=$vote_round");
+
+    // ustaw deadline na pytanie + wyczyść deadline głosowania
+    quiz_try_game_update(
+        "UPDATE games SET vote_ends_at=NULL, round_ends_at=DATE_ADD(NOW(), INTERVAL time_per_question SECOND) WHERE id=$game_id",
+        "UPDATE games SET status='running' WHERE id=$game_id"
+    );
+
+    header("Location: game.php?game=" . $game_id);
+    exit;
+
+} finally {
+    quiz_release_lock($lockKey);
 }
-
-// ustaw current_round na aktualny (nie zmieniamy tutaj – pierwszy z tej tury)
-if ($current_round <= 0) {
-    $current_round = 1;
-}
-mysqli_query($conn,
-    "UPDATE games
-     SET current_round = $current_round
-     WHERE id = $game_id"
-);
-
-// czyścimy głosy z tej tury (żeby nie mieszały się w kolejnych)
-mysqli_query($conn,
-    "DELETE FROM votes WHERE game_id = $game_id AND round_number = $vote_round"
-);
-
-header("Location: game.php?game=" . $game_id);
-exit;

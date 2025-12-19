@@ -5,41 +5,47 @@ require_once __DIR__ . '/../../includes/header.php';
 
 $game_id = (int)($_GET['game'] ?? 0);
 if ($game_id <= 0) {
-    header("Location: index.php");
+    die("Brak ID gry.");
+}
+
+// pobierz grę
+$gameRes = mysqli_query($conn,
+    "SELECT id, status, mode, current_round, total_rounds, time_per_question, round_ends_at
+     FROM games WHERE id = $game_id LIMIT 1"
+);
+$game = mysqli_fetch_assoc($gameRes);
+
+if (!$game) {
+    die("Nie ma takiej gry.");
+}
+
+if ($game['status'] === 'lobby') {
+    header("Location: lobby.php?game=" . $game_id);
     exit;
 }
 
-// gra
-$res = mysqli_query($conn,
-    "SELECT code, total_rounds, time_per_question, current_round, status, mode
- FROM games WHERE id = $game_id"
-);
-$game = mysqli_fetch_assoc($res);
-if (!$game) {
-    die("Nie znaleziono gry.");
-}
 if ($game['status'] === 'finished') {
     header("Location: finish.php?game=" . $game_id);
     exit;
 }
 
-$current_round = (int)$game['current_round'];
+$mode = $game['mode'] ?? 'classic';
 
-// znajdź aktualnego gracza
-$is_guest = is_logged_in() ? 0 : 1;
+// ustal playera
 if (is_logged_in()) {
     $uid = (int)$_SESSION['user_id'];
     $stmt = mysqli_prepare($conn,
-        "SELECT id, nickname, score FROM players WHERE game_id = ? AND user_id = ?"
+        "SELECT id FROM players WHERE game_id = ? AND user_id = ?"
     );
     mysqli_stmt_bind_param($stmt, "ii", $game_id, $uid);
 } else {
     $nickname = $_SESSION['guest_name'] ?? 'Gość';
     $stmt = mysqli_prepare($conn,
-        "SELECT id, nickname, score FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
+        "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
     );
     mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
 }
+
 mysqli_stmt_execute($stmt);
 $res2 = mysqli_stmt_get_result($stmt);
 $player = mysqli_fetch_assoc($res2);
@@ -50,191 +56,281 @@ if (!$player) {
 }
 $player_id = (int)$player['id'];
 
-// pobieranie pytania wraz z kategorią
-$stmt = mysqli_prepare($conn,
-    "SELECT q.id, q.question, q.category, q.a, q.b, q.c, q.d
+$current_round   = (int)$game['current_round'];
+$total_rounds    = (int)$game['total_rounds'];
+$time_per_q      = (int)$game['time_per_question'];
+
+// pobierz pytanie z game_questions
+$qRes = mysqli_query($conn,
+    "SELECT q.*
      FROM game_questions gq
-     JOIN questions q ON q.id = gq.question_id
-     WHERE gq.game_id = ? AND gq.round_number = ?"
+     JOIN questions q ON gq.question_id = q.id
+     WHERE gq.game_id = $game_id AND gq.round_number = $current_round
+     LIMIT 1"
 );
-mysqli_stmt_bind_param($stmt, "ii", $game_id, $current_round);
-mysqli_stmt_execute($stmt);
-$resq = mysqli_stmt_get_result($stmt);
-$qrow = mysqli_fetch_assoc($resq);
-mysqli_stmt_close($stmt);
+$qrow = mysqli_fetch_assoc($qRes);
 
 if (!$qrow) {
-    // Jeśli tryb dynamiczny i nie ma pytania na tę rundę,
-    // to znaczy, że trzeba przejść do głosowania.
-    if (($game['mode'] ?? 'classic') === 'dynamic') {
+    // w dynamicznym brak pytania oznacza fazę głosowania
+    if ($mode === 'dynamic') {
         header("Location: vote.php?game=" . $game_id);
         exit;
-    } else {
-        header("Location: finish.php?game=" . $game_id);
-        exit;
+    }
+    die("Brak pytania dla tej rundy.");
+}
+
+// sprawdź czy już odpowiadał (pobieramy też time_left)
+$already_answered = false;
+$my_answer = null;
+$my_time_left_at_answer = null;
+$ansStmt = mysqli_prepare($conn,
+    "SELECT answer, time_left, answered_at
+     FROM answers
+     WHERE game_id = ? AND player_id = ? AND question_id = ?
+     LIMIT 1"
+);
+$qid = (int)$qrow['id'];
+mysqli_stmt_bind_param($ansStmt, "iii", $game_id, $player_id, $qid);
+mysqli_stmt_execute($ansStmt);
+$ansRes = mysqli_stmt_get_result($ansStmt);
+$arow = mysqli_fetch_assoc($ansRes);
+mysqli_stmt_close($ansStmt);
+
+if ($arow) {
+    $already_answered = true;
+    $my_answer = $arow['answer'];
+    $my_time_left_at_answer = (int)($arow['time_left'] ?? 0);
+}
+
+// czas do końca rundy wg serwera (jeśli migracja jeszcze nie wykonana – fallback do pełnego time_per_question)
+$roundEndsAt = $game['round_ends_at'] ?? null;
+$timeLeftInitial = $time_per_q;
+$roundEndsTs = null;
+if (!empty($roundEndsAt)) {
+    $ts = strtotime($roundEndsAt);
+    if ($ts !== false) {
+        $roundEndsTs = $ts;
+        $timeLeftInitial = max(0, $ts - time());
+        // sanity: nie pokazuj więcej niż time_per_q
+        if ($timeLeftInitial > $time_per_q) {
+            $timeLeftInitial = $time_per_q;
+        }
     }
 }
 
-$question_id = (int)$qrow['id'];
+// opcje odpowiedzi (losujemy kolejność, ale litery A-D są przypisane do kolumn a-d)
+$options = ['a', 'b', 'c', 'd'];
+shuffle($options);
 
-// czy gracz już odpowiedział?
-$res = mysqli_query($conn,
-    "SELECT answer FROM answers
-     WHERE game_id = $game_id AND player_id = $player_id AND question_id = $question_id"
-);
-$arow = mysqli_fetch_assoc($res);
-$already_answered = $arow ? true : false;
-$selected_answer = $arow['answer'] ?? '';
+$correct = strtoupper($qrow['correct']);
+$category = $qrow['category'] ?? '';
+
+// oblicz "odpowiedziałeś po X sekundach" (bazujemy na time_left zapisanym w DB)
+$answeredAfter = null;
+if ($already_answered && $my_time_left_at_answer !== null) {
+    $answeredAfter = max(0, $time_per_q - (int)$my_time_left_at_answer);
+}
 ?>
+
 <div class="container">
-    <h1>Quiz – pytanie <?php echo $current_round; ?>/<?php echo (int)$game['total_rounds']; ?></h1>
-    <p>Gracz: <?php echo htmlspecialchars($player['nickname']); ?>,
-       wynik: <?php echo (int)$player['score']; ?> pkt</p>
-    <p>Czas: <span id="timer"></span></p>
+    <h1>Quiz</h1>
+    <p>Runda <?php echo $current_round; ?> / <?php echo $total_rounds; ?></p>
 
-    <div class="card">
+    <div class="game-tile" style="margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
+            <div>
+                <div style="font-weight:600;">Czas do końca rundy: <span id="time-left">...</span> s</div>
+                <div id="progress" style="font-size:0.85rem; color:#9ca3af;"></div>
+            </div>
+            <div style="text-align:right;">
+                <?php if ($category !== ''): ?>
+                    <div style="font-size:0.85rem; color:#9ca3af;">Kategoria</div>
+                    <div style="font-weight:600;"><?php echo htmlspecialchars($category); ?></div>
+                <?php endif; ?>
+            </div>
+        </div>
+        <div id="answer-meta" style="margin-top:10px; font-size:0.9rem; color:#e5e7eb;"></div>
+    </div>
 
-        <!-- KATEGORIA PYTANIA -->
-        <?php if (!empty($qrow['category'])): ?>
-            <p class="question-category">
-                <strong>Kategoria:</strong> <?php echo htmlspecialchars($qrow['category']); ?>
-            </p>
-        <?php endif; ?>
-
-        <p><?php echo nl2br(htmlspecialchars($qrow['question'])); ?></p>
-
-        <div class="answers-grid">
-            <?php
-                $keys = ['a', 'b', 'c', 'd'];
-                $shuffled = $keys;
-                shuffle($shuffled);
-
-                $displayLetters = ['A', 'B', 'C', 'D'];
-
-                foreach ($shuffled as $index => $opt):
-                    if (!empty($qrow[$opt])):
-            ?>
-                <button class="btn answer-btn"
-                        data-answer="<?php echo $opt; ?>"
-                        onclick="sendAnswer('<?php echo $opt; ?>')">
-                    <?php echo $displayLetters[$index]; ?>.
-                    <?php echo htmlspecialchars($qrow[$opt]); ?>
-                </button>
-            <?php
-                    endif;
-                endforeach;
-            ?>
+    <div class="game-tile" style="margin-bottom:16px;">
+        <div class="game-title" style="margin-bottom:10px;">Pytanie:</div>
+        <div style="font-size:1.05rem; line-height:1.35;">
+            <?php echo htmlspecialchars($qrow['question']); ?>
         </div>
     </div>
 
-    <p id="status"></p>
-    <p><a href="/index.php">Przerwij i wróć do strony głównej</a></p>
+    <div class="category-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+        <?php foreach ($options as $opt): ?>
+            <?php
+                $letter = strtoupper($opt); // A/B/C/D odpowiada kolumnom a/b/c/d
+                $label = $qrow[$opt];
+            ?>
+            <button class="btn-secondary" style="text-align:left; padding:14px; border-radius:14px;"
+                onclick="sendAnswer('<?php echo $letter; ?>')"
+                data-answer="<?php echo $letter; ?>"
+                id="btn_<?php echo $letter; ?>">
+                <strong><?php echo $letter; ?>.</strong> <?php echo htmlspecialchars($label); ?>
+            </button>
+        <?php endforeach; ?>
+    </div>
+
+    <p id="info" style="margin-top:14px;"></p>
+
+    <p><a href="/index.php">&larr; Wróć do strony głównej</a></p>
 </div>
 
 <script>
-let timeLeft = <?php echo (int)$game['time_per_question']; ?>;
+const gameId = <?php echo (int)$game_id; ?>;
+const timePerQ = <?php echo (int)$time_per_q; ?>;
+let timeLeft = <?php echo (int)$timeLeftInitial; ?>;
 let answered = <?php echo $already_answered ? 'true' : 'false'; ?>;
-let selected = "<?php echo htmlspecialchars($selected_answer); ?>";
-let timerId = null;
+let selected = <?php echo $my_answer !== null ? json_encode($my_answer) : 'null'; ?>;
+let answeredAfter = <?php echo $answeredAfter !== null ? (int)$answeredAfter : 'null'; ?>;
+let myTimeLeftAtAnswer = <?php echo $my_time_left_at_answer !== null ? (int)$my_time_left_at_answer : 'null'; ?>;
 
-function init() {
-    const btns = document.querySelectorAll(".answer-btn");
-    btns.forEach(b => {
-        if (answered && b.dataset.answer === selected) {
-            b.classList.add("btn-selected");
-        }
-        if (answered) {
-            b.disabled = true;
+const timeEl = document.getElementById('time-left');
+const infoEl = document.getElementById('info');
+const metaEl = document.getElementById('answer-meta');
+const progressEl = document.getElementById('progress');
+
+function setButtonsDisabled(disabled) {
+    document.querySelectorAll('button[data-answer]').forEach(b => {
+        b.disabled = disabled;
+        b.style.opacity = disabled ? 0.65 : 1;
+        b.style.cursor = disabled ? 'not-allowed' : 'pointer';
+    });
+}
+
+function highlightSelected() {
+    if (!selected) return;
+    document.querySelectorAll('button[data-answer]').forEach(b => {
+        if (b.dataset.answer === String(selected).toUpperCase()) {
+            b.classList.add('btn-primary');
+            b.classList.remove('btn-secondary');
         }
     });
+}
+
+function renderMeta() {
     if (!answered) {
-        startTimer();
+        metaEl.textContent = "";
+        return;
+    }
+
+    if (!selected) {
+        metaEl.textContent = `Nie udzieliłeś odpowiedzi w czasie. Czekamy na pozostałych graczy...`;
+        return;
+    }
+
+    const ansLetter = String(selected).toUpperCase();
+    const used = (answeredAfter !== null) ? answeredAfter : (timePerQ - Math.max(0, myTimeLeftAtAnswer || 0));
+    const left = (myTimeLeftAtAnswer !== null) ? myTimeLeftAtAnswer : null;
+
+    if (left !== null) {
+        metaEl.textContent = `Twoja odpowiedź: ${ansLetter}. Odpowiedziałeś po ${used}s (zostało ${left}s). Czekamy na pozostałych...`;
     } else {
-        document.getElementById("status").textContent =
-            "Już odpowiedziałeś. Czekamy na innych graczy...";
+        metaEl.textContent = `Twoja odpowiedź: ${ansLetter}. Czekamy na pozostałych...`;
+    }
+}
+
+function updateTimerUI() {
+    timeEl.textContent = String(Math.max(0, timeLeft));
+}
+
+async function sendAnswer(letter) {
+    if (answered) return;
+    answered = true;
+
+    // jeśli gracz nie odpowiedział (timeout) – wysyłamy NULL/"" aby serwer mógł przejść dalej
+    const answerLetter = (letter === null || letter === undefined) ? '' : String(letter).toUpperCase();
+
+    // natychmiast blokujemy przyciski
+    setButtonsDisabled(true);
+
+    const payload = new URLSearchParams({
+        game_id: String(gameId),
+        question_id: String(<?php echo (int)$qrow['id']; ?>),
+        answer: answerLetter,
+        time_left: String(Math.max(0, Math.min(timePerQ, timeLeft)))
+    });
+
+    try {
+        const resp = await fetch('answer.php', {
+            method: 'POST',
+            headers: {'Content-Type':'application/x-www-form-urlencoded'},
+            body: payload.toString()
+        });
+        const data = await resp.json();
+        if (!data.ok && data.error !== 'already_answered') {
+            infoEl.textContent = "Błąd wysyłania odpowiedzi: " + (data.error || 'unknown');
+        }
+
+        // zapisz lokalnie
+        selected = answerLetter !== '' ? answerLetter : null;
+        myTimeLeftAtAnswer = Math.max(0, Math.min(timePerQ, timeLeft));
+        answeredAfter = timePerQ - myTimeLeftAtAnswer;
+
+        highlightSelected();
+        renderMeta();
+        pollNext();
+    } catch (e) {
+        infoEl.textContent = "Błąd połączenia przy wysyłaniu odpowiedzi.";
+        // mimo wszystko próbujemy przejść dalej – next.php i tak ma fail-safe na timeout
         pollNext();
     }
 }
 
-function startTimer() {
-    const el = document.getElementById("timer");
-    el.textContent = timeLeft + " s";
-
-    timerId = setInterval(() => {
-        timeLeft--;
-        if (timeLeft <= 0) {
-            clearInterval(timerId);
-            if (!answered) {
-                answered = true;
-                document.querySelectorAll(".answer-btn").forEach(b => b.disabled = true);
-                document.getElementById("status").textContent =
-                    "Czas minął. Czekamy na innych graczy...";
-                pollNext();
-            }
-            el.textContent = "0 s";
-        } else {
-            el.textContent = timeLeft + " s";
-        }
-    }, 1000);
-}
-
-function sendAnswer(ans) {
-    if (answered) return;
-    answered = true;
-    clearInterval(timerId);
-
-    document.querySelectorAll(".answer-btn").forEach(b => {
-        b.disabled = true;
-        if (b.dataset.answer === ans) {
-            b.classList.add("btn-selected");
-        }
-    });
-
-    document.getElementById("status").textContent =
-        "Odpowiedź wysłana. Czekamy na innych graczy...";
-
-    const fd = new FormData();
-    fd.append("game_id", "<?php echo $game_id; ?>");
-    fd.append("question_id", "<?php echo $question_id; ?>");
-    fd.append("answer", ans);
-    fd.append("time_left", timeLeft);
-
-    fetch("answer.php", { method: "POST", body: fd })
+function pollNext() {
+    fetch('next.php?game=' + gameId)
         .then(r => r.json())
         .then(data => {
-            if (!data.ok) {
-                document.getElementById("status").textContent = "Błąd przy wysyłaniu odpowiedzi.";
+            if (data.action === 'wait') {
+                const a = (data.answered !== undefined && data.total !== undefined)
+                    ? `Odpowiedzi: ${data.answered}/${data.total}`
+                    : 'Czekamy na pozostałych graczy...';
+                progressEl.textContent = a;
+                setTimeout(pollNext, 2000);
+            } else if (data.action === 'next') {
+                window.location = 'game.php?game=' + gameId;
+            } else if (data.action === 'finish') {
+                window.location = 'finish.php?game=' + gameId;
             } else {
-                pollNext();
+                // error/busy
+                setTimeout(pollNext, 2000);
             }
         })
-        .catch(() => {
-            document.getElementById("status").textContent = "Błąd sieci.";
-        });
+        .catch(_ => setTimeout(pollNext, 2000));
 }
 
-function pollNext() {
-    const code = "<?php echo $game['code']; ?>";
-    const round = <?php echo $current_round; ?>;
-
-    const check = () => {
-        fetch("next.php?code=" + encodeURIComponent(code) + "&round=" + round)
-            .then(r => r.json())
-            .then(data => {
-                if (data.action === "wait") {
-                    setTimeout(check, 2000);
-                } else if (data.action === "next") {
-                    window.location.href = "game.php?game=<?php echo $game_id; ?>";
-                } else if (data.action === "finish") {
-                    window.location.href = "finish.php?game=<?php echo $game_id; ?>";
-                }
-            })
-            .catch(() => setTimeout(check, 3000));
-    };
-    check();
+// init
+updateTimerUI();
+if (answered) {
+    setButtonsDisabled(true);
+    highlightSelected();
+    renderMeta();
+    pollNext();
 }
 
-document.addEventListener("DOMContentLoaded", init);
+// tick
+setInterval(() => {
+    if (timeLeft > 0) {
+        timeLeft--;
+        updateTimerUI();
+
+        // gdy czas dobiegnie końca, a gracz nie odpowiedział → wyślij timeout
+        if (timeLeft <= 0 && !answered) {
+            updateTimerUI();
+            infoEl.textContent = "Czas minął. Zapisuję brak odpowiedzi...";
+            sendAnswer('');
+        }
+    } else {
+        updateTimerUI();
+        if (!answered) {
+            infoEl.textContent = "Czas minął. Zapisuję brak odpowiedzi...";
+            sendAnswer('');
+        }
+    }
+}, 1000);
 </script>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

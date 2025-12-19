@@ -12,8 +12,31 @@ if ($game_id <= 0) {
     die("Brak ID gry.");
 }
 
+function quiz_try_update_game(string $sql_with_timers, string $sql_fallback): void
+{
+    global $conn;
+
+    if (mysqli_query($conn, $sql_with_timers)) {
+        return;
+    }
+
+    $errno = mysqli_errno($conn);
+    $err   = mysqli_error($conn);
+
+    // Migracja DB mogła jeszcze nie zostać wykonana (unknown column)
+    if ($errno === 1054) {
+        if (!mysqli_query($conn, $sql_fallback)) {
+            die("Błąd bazy danych (fallback): " . mysqli_error($conn));
+        }
+        return;
+    }
+
+    die("Błąd bazy danych: " . $err);
+}
+
 // pobierz grę wraz z trybem
-$res = mysqli_query($conn,
+$res = mysqli_query(
+    $conn,
     "SELECT owner_player_id, total_rounds, mode FROM games WHERE id = $game_id"
 );
 $game = mysqli_fetch_assoc($res);
@@ -26,17 +49,17 @@ $owner_player_id = (int)$game['owner_player_id'];
 $mode = $game['mode'] ?? 'classic';
 
 // ustal aktualnego playera
-$is_guest = is_logged_in() ? 0 : 1;
-
 if (is_logged_in()) {
     $uid = (int)$_SESSION['user_id'];
-    $stmt = mysqli_prepare($conn,
+    $stmt = mysqli_prepare(
+        $conn,
         "SELECT id FROM players WHERE game_id = ? AND user_id = ?"
     );
     mysqli_stmt_bind_param($stmt, "ii", $game_id, $uid);
 } else {
     $nickname = $_SESSION['guest_name'] ?? 'Gość';
-    $stmt = mysqli_prepare($conn,
+    $stmt = mysqli_prepare(
+        $conn,
         "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
     );
     mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
@@ -53,26 +76,30 @@ if (!$player || (int)$player['id'] !== $owner_player_id) {
 
 /*
     ======================================================
-    TRYB DYNAMICZNY — przejście bez losowania pytań
+    TRYB DYNAMICZNY — start gry i przejście do głosowania
     ======================================================
 */
 if ($mode === 'dynamic') {
 
-    // ustaw start gry
-    mysqli_query($conn,
-        "UPDATE games 
-         SET status='running', current_round=1 
-         WHERE id = $game_id"
-    );
+    // status=running + deadline na głosowanie (używamy time_per_question jako czasu na wybór kategorii)
+    $sqlWith = "UPDATE games
+                SET status='running', current_round=1,
+                    vote_ends_at = DATE_ADD(NOW(), INTERVAL time_per_question SECOND),
+                    round_ends_at = NULL
+                WHERE id = $game_id";
+    $sqlFallback = "UPDATE games
+                    SET status='running', current_round=1
+                    WHERE id = $game_id";
 
-    // przekierowanie do głosowania
+    quiz_try_update_game($sqlWith, $sqlFallback);
+
     header("Location: vote.php?game=" . $game_id);
     exit;
 }
 
 /*
     ======================================================
-    TRYB KLASYCZNY — STARA LOGIKA
+    TRYB KLASYCZNY — losowanie już wykonane w create_game.php
     ======================================================
 */
 
@@ -90,12 +117,17 @@ if ($qcount <= 0) {
 // dopasowanie rund
 $total_rounds = min((int)$game['total_rounds'], $qcount);
 
-// uruchomienie gry
-mysqli_query($conn,
-    "UPDATE games 
-     SET status='running', total_rounds=$total_rounds, current_round=1 
-     WHERE id = $game_id"
-);
+$sqlWith = "UPDATE games
+            SET status='running', total_rounds=$total_rounds, current_round=1,
+                round_ends_at = DATE_ADD(NOW(), INTERVAL time_per_question SECOND),
+                vote_ends_at = NULL
+            WHERE id = $game_id";
+
+$sqlFallback = "UPDATE games
+                SET status='running', total_rounds=$total_rounds, current_round=1
+                WHERE id = $game_id";
+
+quiz_try_update_game($sqlWith, $sqlFallback);
 
 header("Location: game.php?game=" . $game_id);
 exit;

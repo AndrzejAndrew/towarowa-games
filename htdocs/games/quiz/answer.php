@@ -1,107 +1,142 @@
 <?php
-session_start();
 require_once __DIR__ . '/../../includes/db.php';
+require_once __DIR__ . '/../../includes/auth.php';
 
-header('Content-Type: application/json');
+header("Content-Type: application/json");
 
-$game_id      = (int)($_POST['game_id'] ?? 0);
-$question_id  = (int)($_POST['question_id'] ?? 0);
-$answer_raw   = $_POST['answer'] ?? '';
-$answer       = strtoupper(trim($answer_raw));
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(["ok" => false, "error" => "bad_method"]);
+    exit;
+}
 
-$time_left    = (int)($_POST['time_left'] ?? 0);   // czas, który pozostał na zegarze
+$game_id = (int)($_POST['game_id'] ?? 0);
+$question_id = (int)($_POST['question_id'] ?? 0);
+$answer_raw = $_POST['answer'] ?? '';
+$time_left_raw = $_POST['time_left'] ?? 0;
 
 if ($game_id <= 0 || $question_id <= 0) {
-    echo json_encode(['ok' => false, 'error' => 'bad_params']);
+    echo json_encode(["ok" => false, "error" => "bad_params"]);
     exit;
 }
 
-// Pobierz gracza (zalogowany lub gość)
-if (isset($_SESSION['user_id'])) {
+// Ujednolicamy format odpowiedzi: A/B/C/D albo NULL (brak odpowiedzi)
+$answer = strtoupper(trim((string)$answer_raw));
+if ($answer === '') {
+    $answer_db = null; // zapisujemy NULL = brak odpowiedzi
+} else {
+    // tylko A-D – wszystko inne traktujemy jako brak odpowiedzi
+    if (!in_array($answer, ['A','B','C','D'], true)) {
+        $answer = '';
+        $answer_db = null;
+    } else {
+        $answer_db = $answer;
+    }
+}
+
+// pobierz time_per_question (dla clamp)
+$tpq = 0;
+$gr = mysqli_query($conn, "SELECT time_per_question, status FROM games WHERE id=$game_id LIMIT 1");
+$g = $gr ? mysqli_fetch_assoc($gr) : null;
+if (!$g) {
+    echo json_encode(["ok" => false, "error" => "game_not_found"]);
+    exit;
+}
+if (($g['status'] ?? '') !== 'running') {
+    echo json_encode(["ok" => false, "error" => "game_not_running"]);
+    exit;
+}
+$tpq = (int)($g['time_per_question'] ?? 0);
+
+$time_left = (int)$time_left_raw;
+if ($time_left < 0) $time_left = 0;
+if ($tpq > 0 && $time_left > $tpq) $time_left = $tpq;
+
+// znajdź player_id
+$player_id = null;
+
+if (is_logged_in()) {
     $uid = (int)$_SESSION['user_id'];
     $stmt = mysqli_prepare($conn,
-        "SELECT id, score FROM players WHERE game_id = ? AND user_id = ?"
+        "SELECT id FROM players WHERE game_id = ? AND user_id = ? LIMIT 1"
     );
     mysqli_stmt_bind_param($stmt, "ii", $game_id, $uid);
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+    $row = mysqli_fetch_assoc($res);
+    mysqli_stmt_close($stmt);
+    if ($row) {
+        $player_id = (int)$row['id'];
+    }
 } else {
-    $nickname = $_SESSION['guest_name'] ?? '';
-    $stmt = mysqli_prepare($conn,
-        "SELECT id, score FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ?"
-    );
-    mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
+    $nickname = $_SESSION['guest_name'] ?? 'Gość';
+    $guest_id = (int)($_SESSION['guest_id'] ?? 0);
+
+    // guest_id jest bezpieczniejszy niż nickname (nickname może się powtórzyć)
+    if ($guest_id > 0) {
+        $stmt = mysqli_prepare($conn,
+            "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND guest_id = ? LIMIT 1"
+        );
+        mysqli_stmt_bind_param($stmt, "ii", $game_id, $guest_id);
+    } else {
+        $stmt = mysqli_prepare($conn,
+            "SELECT id FROM players WHERE game_id = ? AND is_guest = 1 AND nickname = ? LIMIT 1"
+        );
+        mysqli_stmt_bind_param($stmt, "is", $game_id, $nickname);
+    }
+
+    mysqli_stmt_execute($stmt);
+    $res = mysqli_stmt_get_result($stmt);
+    $row = mysqli_fetch_assoc($res);
+    mysqli_stmt_close($stmt);
+
+    if ($row) {
+        $player_id = (int)$row['id'];
+    }
 }
 
-mysqli_stmt_execute($stmt);
-$res = mysqli_stmt_get_result($stmt);
-$player = mysqli_fetch_assoc($res);
-mysqli_stmt_close($stmt);
-
-if (!$player) {
-    echo json_encode(['ok' => false, 'error' => 'player_not_found']);
+if (!$player_id) {
+    echo json_encode(["ok" => false, "error" => "player_not_found"]);
     exit;
 }
 
-$player_id = (int)$player['id'];
-
-// Pobierz poprawną odpowiedź
-$stmt = mysqli_prepare($conn,
-    "SELECT correct FROM questions WHERE id = ?"
+// sprawdź czy już odpowiedział
+$check = mysqli_prepare($conn,
+    "SELECT id FROM answers WHERE game_id = ? AND player_id = ? AND question_id = ? LIMIT 1"
 );
-mysqli_stmt_bind_param($stmt, "i", $question_id);
-mysqli_stmt_execute($stmt);
-$res = mysqli_stmt_get_result($stmt);
-$q = mysqli_fetch_assoc($res);
-mysqli_stmt_close($stmt);
+mysqli_stmt_bind_param($check, "iii", $game_id, $player_id, $question_id);
+mysqli_stmt_execute($check);
+$checkRes = mysqli_stmt_get_result($check);
+$exist = mysqli_fetch_assoc($checkRes);
+mysqli_stmt_close($check);
 
-if (!$q) {
-    echo json_encode(['ok' => false, 'error' => 'question_not_found']);
+if ($exist) {
+    echo json_encode(["ok" => false, "error" => "already_answered"]);
     exit;
 }
 
-$correct = strtoupper($q['correct']);
-$is_correct = ($answer !== '' && $answer === $correct) ? 1 : 0;
+// pobierz poprawną odpowiedź
+$q = mysqli_query($conn, "SELECT correct FROM questions WHERE id=$question_id LIMIT 1");
+$qrow = $q ? mysqli_fetch_assoc($q) : null;
+$correct = strtoupper((string)($qrow['correct'] ?? ''));
 
-// Sprawdź czy już odpowiedział
-$stmt = mysqli_prepare($conn,
-    "SELECT id FROM answers WHERE game_id = ? AND player_id = ? AND question_id = ?"
-);
-mysqli_stmt_bind_param($stmt, "iii", $game_id, $player_id, $question_id);
-mysqli_stmt_execute($stmt);
-mysqli_stmt_store_result($stmt);
-$exists = mysqli_stmt_num_rows($stmt) > 0;
-mysqli_stmt_close($stmt);
-
-if ($exists) {
-    echo json_encode(['ok' => true, 'info' => 'already_answered']);
-    exit;
+$is_correct = 0;
+if ($answer_db !== null && $correct !== '' && $answer_db === $correct) {
+    $is_correct = 1;
 }
 
-// Zapisz odpowiedź + czas
-$stmt = mysqli_prepare($conn,
+$stmtIns = mysqli_prepare($conn,
     "INSERT INTO answers (game_id, player_id, question_id, answer, is_correct, time_left)
      VALUES (?, ?, ?, ?, ?, ?)"
 );
-mysqli_stmt_bind_param($stmt, "iiisii",
-    $game_id, $player_id, $question_id, $answer, $is_correct, $time_left
-);
-mysqli_stmt_execute($stmt);
-mysqli_stmt_close($stmt);
+mysqli_stmt_bind_param($stmtIns, "iiisii", $game_id, $player_id, $question_id, $answer_db, $is_correct, $time_left);
+$ok = mysqli_stmt_execute($stmtIns);
+$err = mysqli_stmt_error($stmtIns);
+mysqli_stmt_close($stmtIns);
 
-// ---------------------------------------
-//  NALICZ PUNKTY WG SYSTEMU A:
-//  100 pkt za poprawną odpowiedź
-//  + 10 pkt za każdą pozostałą sekundę
-// ---------------------------------------
-
-if ($is_correct) {
-    $base_points  = 100;
-    $bonus_points = max(0, $time_left * 10);
-
-    $total_add = $base_points + $bonus_points;
-
-    mysqli_query($conn,
-        "UPDATE players SET score = score + $total_add WHERE id = $player_id"
-    );
+if (!$ok) {
+    echo json_encode(["ok" => false, "error" => "db_error", "details" => $err]);
+    exit;
 }
 
-echo json_encode(['ok' => true]);
+echo json_encode(["ok" => true, "is_correct" => $is_correct]);
+exit;
