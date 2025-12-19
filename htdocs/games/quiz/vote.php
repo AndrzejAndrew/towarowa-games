@@ -143,6 +143,12 @@ if (is_array($game) && array_key_exists('vote_time_left', $game) && $game['vote_
     <h1>Wybór kategorii</h1>
     <p>Głosowanie: <?php echo $vote_round; ?> (pytanie <?php echo $current_round; ?> / <?php echo (int)$game['total_rounds']; ?>)</p>
 
+    <?php if (($_GET['err'] ?? '') === 'missing'): ?>
+        <div class="game-tile" style="margin:12px 0; border:1px solid #b45309;">
+            <strong>Nie udało się zapisać głosu.</strong> Kliknij kategorię jeszcze raz.
+        </div>
+    <?php endif; ?>
+
     <div class="game-tile" style="margin-bottom:14px;">
         <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
             <div>
@@ -162,7 +168,7 @@ if (is_array($game) && array_key_exists('vote_time_left', $game) && $game['vote_
     <?php else: ?>
         <form method="POST" action="vote_submit.php" id="vote-form">
             <input type="hidden" name="game_id" value="<?php echo $game_id; ?>">
-
+            <input type="hidden" name="category" id="category-input" value="">
             <div class="category-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
                 <?php foreach ($cats as $cat): ?>
                     <button type="submit" name="category" value="<?php echo htmlspecialchars($cat); ?>"
@@ -236,18 +242,31 @@ if (alreadyVoted) {
     metaEl.textContent = 'Oddałeś głos. Gra rozpocznie się automatycznie po zakończeniu głosowania.';
     disableVoteForm();
     pollVote();
-} else {
-    // po wysłaniu formularza blokujemy przyciski szybciej (UX)
+} else {    // po kliknięciu ustawiamy hidden `category` zanim zablokujemy przyciski
     const form = document.getElementById('vote-form');
+    const catInput = document.getElementById('category-input');
+
+    if (form && catInput) {
+        form.querySelectorAll('button[name="category"]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                catInput.value = btn.value || '';
+            });
+        });
+    }
+
     if (form) {
-        form.addEventListener('submit', () => {
+        form.addEventListener('submit', (e) => {
+            // awaryjnie: jeśli browser nie przekaże klikniętego submit buttona (bo go dezaktywujemy), hidden ma już wartość
+            if (catInput && !catInput.value && e && e.submitter && e.submitter.name === 'category') {
+                catInput.value = e.submitter.value || '';
+            }
             alreadyVoted = true;
             metaEl.textContent = 'Głos zapisany. Czekamy na pozostałych...';
             disableVoteForm();
             setTimeout(pollVote, 500);
         });
     }
-    pollVote();
+pollVote();
 }
 
 setInterval(() => {

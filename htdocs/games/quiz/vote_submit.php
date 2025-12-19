@@ -8,16 +8,28 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 $game_id = (int)($_POST['game_id'] ?? 0);
-$category = trim($_POST['category'] ?? '');
+
+$rawCat = $_POST['category'] ?? '';
+if (is_array($rawCat)) {
+    $rawCat = $rawCat[0] ?? '';
+}
+$category = trim((string)$rawCat);
+
+// UX: zamiast białej strony "Brak danych" wracamy na ekran głosowania.
 if ($game_id <= 0 || $category === '') {
-    die("Brak danych.");
+    if ($game_id > 0) {
+        header("Location: vote.php?game=" . $game_id . "&err=missing");
+    } else {
+        header("Location: index.php");
+    }
+    exit;
 }
 
 // pobierz grę
 $gRes = mysqli_query($conn,
     "SELECT current_round, mode, status FROM games WHERE id = $game_id LIMIT 1"
 );
-$game = mysqli_fetch_assoc($gRes);
+$game = $gRes ? mysqli_fetch_assoc($gRes) : null;
 if (!$game) {
     die("Gra nie istnieje.");
 }
