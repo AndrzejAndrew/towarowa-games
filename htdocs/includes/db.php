@@ -1,22 +1,18 @@
 <?php
-// Spójna strefa czasowa w całym portalu (wyświetlanie / logi)
-// Dane w bazie najlepiej trzymać w UTC, a wyświetlać w Europe/Warsaw.
-date_default_timezone_set('Europe/Warsaw');
+require_once __DIR__ . '/../config.php';
 
-// Połączenie z bazą danych - uzupełnij danymi z InfinityFree
-$host = "sql112.infinityfree.com";
-$user = "if0_40535478";
-$pass = "HKndHI2VOBuud30";
-$db   = "if0_40535478_towarowa";
+// Połączenie z bazą danych przy użyciu danych z pliku konfiguracyjnego
+$conn = mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME);
 
-$conn = mysqli_connect($host, $user, $pass, $db);
 if (!$conn) {
-    die("Database connection error: " . mysqli_connect_error());
+    // W środowisku produkcyjnym warto logować błędy do pliku, zamiast wyświetlać je użytkownikowi
+    error_log("Database connection error: " . mysqli_connect_error());
+    // Wyświetlenie generycznej wiadomości o błędzie
+    die("Wystąpił błąd serwera. Prosimy spróbować później.");
 }
 
 mysqli_set_charset($conn, "utf8mb4");
 
-// Wymuś UTC na poziomie sesji MySQL (stabilne NOW()/CURRENT_TIMESTAMP)
-// Nie wymaga uprawnień GLOBAL.
+// Ustawienie strefy czasowej sesji MySQL na UTC dla spójności danych
 @mysqli_query($conn, "SET time_zone = '+00:00'");
 ?>
