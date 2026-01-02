@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/header.php';
+require_once __DIR__ . '/../../includes/stats.php'; // Centralny system statystyk
 
 $game_id = (int)($_GET['game'] ?? 0);
 if ($game_id <= 0) {
@@ -22,9 +23,6 @@ if (!$game) {
 $already_notified = (int)($game['discord_finish_sent'] ?? 0);
 
 // Upewnij się, że scores w tabeli players są policzone.
-// W poprzednich wersjach quizu punkty były wyświetlane z players.score,
-// ale nie zawsze były aktualizowane w trakcie gry (np. tryb dynamiczny).
-// Przeliczamy score na podstawie tabeli answers. Operacja jest idempotentna.
 $scoreSql = "
     UPDATE players p
     LEFT JOIN (
@@ -51,18 +49,40 @@ while ($row = mysqli_fetch_assoc($res)) {
     $players[] = $row;
 }
 
-// zapisz historię tylko dla zalogowanych użytkowników
-foreach ($players as $p) {
-    if ((int)$p['is_guest'] === 1 || (int)$p['user_id'] <= 0) continue;
+// ZAPIS STATYSTYK (nowy, poprawny kod)
+if (!empty($players)) {
+    $top_score = (int)$players[0]['score'];
+    $winners = [];
+    foreach ($players as $p) {
+        if ((int)$p['score'] === $top_score) {
+            $winners[] = $p;
+        }
+    }
 
-    $uid = (int)$p['user_id'];
-    $result = 'Quiz: ' . (int)$p['score'] . ' pkt (kod: ' . $game['code'] . ')';
+    foreach ($players as $p) {
+        $uid = (int)$p['user_id'];
+        if ($uid <= 0) continue; // pomiń gości
 
-    mysqli_query($conn,
-        "INSERT INTO game_history (user_id, game_type, result)
-         VALUES ($uid, 'quiz', '" . mysqli_real_escape_string($conn, $result) . "')"
-    );
+        $score = (int)$p['score'];
+
+        if (count($winners) > 1) {
+            // Jeśli jest więcej niż 1 zwycięzca, wszyscy z top_score mają remis
+            if ($score === $top_score) {
+                stats_register_result($uid, 'quiz', 'draw', $score);
+            } else {
+                stats_register_result($uid, 'quiz', 'loss', $score);
+            }
+        } else {
+            // Jeśli jest 1 zwycięzca
+            if ($p['id'] === $winners[0]['id']) {
+                stats_register_result($uid, 'quiz', 'win', $score);
+            } else {
+                stats_register_result($uid, 'quiz', 'loss', $score);
+            }
+        }
+    }
 }
+
 
 /*
     ============================
@@ -219,26 +239,4 @@ while ($qrow = mysqli_fetch_assoc($res_q)):
 </div>
 
 <?php
-require_once __DIR__ . '/../../includes/stats.php';
-// STATYSTYKI QUIZU
-if (!empty($players)) {
-
-    // Zwycięzca — to pierwszy gracz z posortowanej listy
-    $winner_user_id = (int)$players[0]['user_id'];
-
-    foreach ($players as $p) {
-        $uid = (int)$p['user_id'];
-        if ($uid <= 0) continue; // pomiń gości
-
-        $score = (int)$p['score'];
-
-        if ($uid === $winner_user_id) {
-            stats_register_result($uid, 'quiz', 'win', $score);
-        } else {
-            stats_register_result($uid, 'quiz', 'loss', $score);
-        }
-    }
-}
-
 require_once __DIR__ . '/../../includes/footer.php';
-
