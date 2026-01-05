@@ -193,7 +193,7 @@ function bot_choose_move(array $ball, array $usedLines, int $difficulty = 1): ?a
 
             // C) Unikanie dawania przeciwnikowi odbicia to kluczowa defensywa
             if (ps_is_opponent_bounce_setup($x, $y, $m['x'], $m['y'], $usedLines)) {
-                $score -= 1000;
+                $score -= 400; // ZMIANA: Zmniejszona kara z -1000 do -400
             }
             return $score;
         };
@@ -233,6 +233,6 @@ function bot_choose_move(array $ball, array $usedLines, int $difficulty = 1): ?a
     }
 
     // D) normalna heurystyka
-    usort($moves, fn($a, $b) => $scoreFn($b) <=> $scoreFn($a));
+    usort($moves, fn($a, b) => $scoreFn($b) <=> $scoreFn($a));
     return $moves[0];
 }
