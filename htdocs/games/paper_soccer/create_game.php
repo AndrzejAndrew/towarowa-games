@@ -27,21 +27,22 @@ $code = random_code(6);
 if ($mode === 'bot') {
 
     $difficulty = (int)($_POST['bot_difficulty'] ?? $_GET['bot_difficulty'] ?? 1);
-    // dopuszczalne poziomy: 1..4
-    $difficulty = max(1, min(4, $difficulty));
+    $difficulty = max(1, min(4, $difficulty)); // NOWE: 1..4
 
     $stmt = $conn->prepare("
         INSERT INTO paper_soccer_games (
             code, mode, bot_difficulty,
             player1_id, player1_name,
             player2_id, player2_name,
-            current_player, winner, status, move_no
+            status, current_player
         ) VALUES (
-            ?, 'bot', ?,
-            ?, ?, 0, 'BOT',
-            1, 0, 'playing', 1
+            ?, 'bot', ?, ?, ?, 0, NULL, 'playing', 1
         )
     ");
+
+    if (!$stmt) {
+        die("SQL prepare error: " . $conn->error);
+    }
 
     $stmt->bind_param("siis", $code, $difficulty, $player1_id, $player1_name);
 
@@ -52,11 +53,15 @@ if ($mode === 'bot') {
             code, mode, bot_difficulty,
             player1_id, player1_name,
             player2_id, player2_name,
-            current_player, winner, status, move_no
+            status, current_player
         ) VALUES (
             ?, 'pvp', NULL, ?, ?, 0, NULL, 'waiting', 1
         )
     ");
+
+    if (!$stmt) {
+        die("SQL prepare error: " . $conn->error);
+    }
 
     $stmt->bind_param("sis", $code, $player1_id, $player1_name);
 }
