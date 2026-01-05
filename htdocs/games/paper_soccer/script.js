@@ -15,54 +15,54 @@ const boardHeight = (rows - 1) * cellSize;
 const marginOutside = 20;   // odstęp od krawędzi canvas do trybun
 const standWidth    = 40;   // szerokość trybun z każdej strony
 
-// rozmiar canvas
-const canvasWidth  = boardWidth  + marginOutside * 2 + standWidth * 2;
-const canvasHeight = boardHeight + marginOutside * 2 + standWidth * 2;
-
-// przesunięcie lewego górnego rogu boiska w canvas
+// pozycja boiska (lewygórny róg)
 const boardOffsetX = marginOutside + standWidth;
 const boardOffsetY = marginOutside + standWidth;
 
-// bramki – logiczne (zgodne z backendem)
-const goalTop = {
-    y: 0,
-    xStart: 3,
-    xEnd: 5
-};
-
-const goalBottom = {
-    y: 12,
-    xStart: 3,
-    xEnd: 5
-};
-
-// stan gry po stronie frontu
-let ball      = { x: 4, y: 6 };
-let usedLines = [];
-let gameId    = null;
-let myPlayer  = null;
-let currentPlayer = 1;
-let gameOver = false;
-let winner = 0;
-let status = "waiting";
-
-// DOM
+// potrzebny canvas
 const canvas = document.getElementById("ps-board");
-const ctx = canvas ? canvas.getContext("2d") : null;
+let   ctx    = null;
 
 if (canvas) {
-    canvas.width  = canvasWidth;
-    canvas.height = canvasHeight;
+    canvas.width  = boardWidth  + (marginOutside + standWidth) * 2;
+    canvas.height = boardHeight + (marginOutside + standWidth) * 2;
+    ctx = canvas.getContext("2d");
 }
 
-const statusEl  = document.getElementById("ps-status");
-const playersEl = document.getElementById("ps-players");
-const messageEl = document.getElementById("ps-message");
+// bramki – logiczne (zgodne z backendem)
+const goalTop = { y: 0,  xStart: 3, xEnd: 5 };
+const goalBottom = { y: 12, xStart: 3, xEnd: 5 };
+
+// stan gry po stronie frontu
+let ball      = { x: 4, y: 6 }; // środek planszy
+let usedLines = [];
+
+// dane z atrybutów canvas (ZGODNE z play.php)
+let ajaxGameID  = canvas ? parseInt(canvas.dataset.gameId, 10) : null;
+let ajaxPlayer  = canvas ? parseInt(canvas.dataset.player, 10) : null;
+let gameMode    = canvas ? (canvas.dataset.mode || null) : null;
+let botDiff     = canvas ? parseInt(canvas.dataset.botDiff || "1", 10) : 1;
+
+let movesLoaded   = 0;
+let isSendingMove = false;
+
+// Wyniki meczów (lokalnie, na podstawie winner)
+let scoreP1 = 0;
+let scoreP2 = 0;
+let scoresLoaded = false;
+let scoreKey = null;
+let scoreCountedForGame = false;
+
+// do animacji piłki
+let animating     = false;
+let animStartTime = 0;
+let animDuration  = 180; // ms
+let animFrom      = null;
+let animTo        = null;
 
 // ----------------------------------------------------
-// HELPERY
+// POMOCNICZE – konwersja z siatki na piksele
 // ----------------------------------------------------
-
 function gridToPx(x, y) {
     return {
         x: boardOffsetX + x * cellSize,
@@ -70,58 +70,41 @@ function gridToPx(x, y) {
     };
 }
 
-function setMessage(txt) {
-    if (messageEl) messageEl.textContent = txt;
-}
-
-function setStatus(txt) {
-    if (statusEl) statusEl.textContent = txt;
-}
-
-function setPlayers(p1, p2) {
-    if (playersEl) playersEl.textContent = `Gracz 1: ${p1} | Gracz 2: ${p2}`;
-}
-
-function isInsideBoard(px, py) {
-    return (
-        px >= boardOffsetX - cellSize / 2 &&
-        px <= boardOffsetX + boardWidth + cellSize / 2 &&
-        py >= boardOffsetY - cellSize / 2 &&
-        py <= boardOffsetY + boardHeight + cellSize / 2
-    );
-}
-
 // ----------------------------------------------------
-// RYSOWANIE – TŁO, TRYBUNY, BOISKO
+// RYSOWANIE – STADION + BOISKO
 // ----------------------------------------------------
-
 function drawStands() {
-    // trybuny – ciemne
-    ctx.fillStyle = "#151515";
+    // tło całego canvas
+    ctx.fillStyle = "#050814";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // lewa
-    ctx.fillRect(marginOutside, marginOutside, standWidth, canvasHeight - marginOutside * 2);
-    // prawa
-    ctx.fillRect(canvasWidth - marginOutside - standWidth, marginOutside, standWidth, canvasHeight - marginOutside * 2);
-    // góra
-    ctx.fillRect(marginOutside, marginOutside, canvasWidth - marginOutside * 2, standWidth);
-    // dół
-    ctx.fillRect(marginOutside, canvasHeight - marginOutside - standWidth, canvasWidth - marginOutside * 2, standWidth);
+    // prostokąt trybun
+    const sx = marginOutside;
+    const sy = marginOutside;
+    const sw = canvas.width  - marginOutside * 2;
+    const sh = canvas.height - marginOutside * 2;
 
-    // drobne „kropki tłumu”
-    ctx.fillStyle = "rgba(255,255,255,0.06)";
-    for (let i = 0; i < 900; i++) {
-        const x = marginOutside + Math.random() * (canvasWidth - marginOutside * 2);
-        const y = marginOutside + Math.random() * (canvasHeight - marginOutside * 2);
+    ctx.fillStyle = "#1e2430";
+    ctx.fillRect(sx, sy, sw, sh);
 
-        // pomijamy obszar boiska
-        if (
-            x > boardOffsetX && x < boardOffsetX + boardWidth &&
-            y > boardOffsetY && y < boardOffsetY + boardHeight
-        ) continue;
+    // paski trybun (pionowe)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, sy, sw, sh);
+    ctx.clip();
 
-        ctx.fillRect(x, y, 1, 1);
+    const stripeWidth = 16;
+    for (let x = sx; x < sx + sw; x += stripeWidth) {
+        ctx.fillStyle = ((((x / stripeWidth) | 0) % 2) === 0) ? "#262d3b" : "#161b26";
+        ctx.fillRect(x, sy, stripeWidth, sh);
     }
+
+    ctx.restore();
+
+    // delikatna ramka stadionu
+    ctx.strokeStyle = "#3b4251";
+    ctx.lineWidth   = 2;
+    ctx.strokeRect(sx, sy, sw, sh);
 }
 
 function drawPitch() {
@@ -155,19 +138,9 @@ function drawPitch() {
     // linia zewnętrzna
     ctx.rect(gx + 6, gy + 6, bw - 12, bh - 12);
 
-    // bramki (góra/dół)
-    // górna
-    const goalW = cellSize * 2; // 2 kratki
-    const topGoalX = gx + (4 * cellSize) - goalW / 2;
-    ctx.rect(topGoalX, gy - 8, goalW, 14);
-
-    // dolna
-    const bottomGoalX = gx + (4 * cellSize) - goalW / 2;
-    ctx.rect(bottomGoalX, gy + bh - 6, goalW, 14);
-
-    // linia środkowa (w poprzek boiska)
-    ctx.moveTo(gx + 6,       gy + bh / 2);
-    ctx.lineTo(gx + bw - 6,  gy + bh / 2);
+    // LINIA ŚRODKOWA (POPRAWKA: w poprzek boiska)
+    ctx.moveTo(gx + 6,      gy + bh / 2);
+    ctx.lineTo(gx + bw - 6, gy + bh / 2);
 
     // koło środkowe
     const center = gridToPx(4, 6);
@@ -175,293 +148,170 @@ function drawPitch() {
     ctx.moveTo(center.x + circleR, center.y);
     ctx.arc(center.x, center.y, circleR, 0, Math.PI * 2);
 
-    // pola karne – górne
+    // pola karne – górne/dolne
     const penaltyDepth   = cellSize * 3.2;
     const boxWidth       = bw * 0.6;
     const boxX           = gx + (bw - boxWidth) / 2;
-    ctx.rect(boxX, gy + 6, boxWidth, penaltyDepth);
+    const topBoxY        = gy + 6;
+    const bottomBoxY     = gy + bh - 6 - penaltyDepth;
 
-    // pola karne – dolne
-    ctx.rect(boxX, gy + bh - 6 - penaltyDepth, boxWidth, penaltyDepth);
+    ctx.rect(boxX, topBoxY, boxWidth, penaltyDepth);
+    ctx.rect(boxX, bottomBoxY, boxWidth, penaltyDepth);
+
+    // małe pola bramkowe
+    const smallDepth = cellSize * 1.6;
+    const smallWidth = bw * 0.35;
+    const smallX     = gx + (bw - smallWidth) / 2;
+    const topSmallY  = topBoxY;
+    const botSmallY  = gy + bh - 6 - smallDepth;
+
+    ctx.rect(smallX, topSmallY, smallWidth, smallDepth);
+    ctx.rect(smallX, botSmallY, smallWidth, smallDepth);
+
+    // punkty karne
+    const topPenaltySpot = { x: center.x, y: topBoxY + penaltyDepth - cellSize * 0.8 };
+    const botPenaltySpot = { x: center.x, y: bottomBoxY + cellSize * 0.8 };
+
+    ctx.moveTo(topPenaltySpot.x + 1.5, topPenaltySpot.y);
+    ctx.arc(topPenaltySpot.x, topPenaltySpot.y, 1.5, 0, Math.PI * 2);
+
+    ctx.moveTo(botPenaltySpot.x + 1.5, botPenaltySpot.y);
+    ctx.arc(botPenaltySpot.x, botPenaltySpot.y, 1.5, 0, Math.PI * 2);
+
+    ctx.stroke();
+
+    // bramki – czerwone pola na liniach końcowych
+    ctx.strokeStyle = "#ff5555";
+    ctx.lineWidth   = 6;
+    ctx.beginPath();
+
+    // górna bramka
+    let pA = gridToPx(goalTop.xStart, goalTop.y);
+    let pB = gridToPx(goalTop.xEnd,   goalTop.y);
+    ctx.moveTo(pA.x, pA.y - cellSize * 0.35);
+    ctx.lineTo(pB.x, pB.y - cellSize * 0.35);
+
+    // dolna bramka
+    pA = gridToPx(goalBottom.xStart, goalBottom.y);
+    pB = gridToPx(goalBottom.xEnd,   goalBottom.y);
+    ctx.moveTo(pA.x, pA.y + cellSize * 0.35);
+    ctx.lineTo(pB.x, pB.y + cellSize * 0.35);
 
     ctx.stroke();
 }
 
-function drawGrid() {
-    // punkty + siatka
-    ctx.fillStyle = "rgba(255,255,255,0.6)";
-    for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-            const p = gridToPx(x, y);
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
-            ctx.fill();
-        }
-    }
+// ----------------------------------------------------
+// PUNKTY, LINIE, PIŁKA
+// ----------------------------------------------------
+function drawPoint(x, y) {
+    const p = gridToPx(x, y);
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#0b1f46";
+    ctx.fill();
 }
 
-function drawLines() {
-    // narysuj wykonane linie
-    ctx.strokeStyle = "#ffd200";
-    ctx.lineWidth   = 4;
+function drawLine(x1, y1, x2, y2) {
+    const p1 = gridToPx(x1, y1);
+    const p2 = gridToPx(x2, y2);
+
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth   = 2.2;
     ctx.lineCap     = "round";
 
-    for (let l of usedLines) {
-        const p1 = gridToPx(l.x1, l.y1);
-        const p2 = gridToPx(l.x2, l.y2);
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.stroke();
-    }
-}
-
-function drawBall() {
-    const p = gridToPx(ball.x, ball.y);
-
-    // cień
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
     ctx.beginPath();
-    ctx.arc(p.x + 2, p.y + 2, 10, 0, Math.PI * 2);
-    ctx.fill();
-
-    // piłka
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-    ctx.fill();
-
-    // „szwy”
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
     ctx.stroke();
 }
 
-function drawBoard() {
-    if (!ctx) return;
+// piłka – cartoon
+function drawBallAtPixel(px, py) {
+    const r = cellSize * 0.33;
 
-    // tło całego canvas
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    ctx.fillStyle = "#0b0b0b";
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    // cień
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.ellipse(px + r * 0.25, py + r * 0.35, r * 0.8, r * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // kula
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = "#fdfdfd";
+    ctx.fill();
+
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#222222";
+    ctx.stroke();
+
+    // „łaty”
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#555555";
+
+    ctx.beginPath();
+    ctx.moveTo(px, py - r);
+    ctx.lineTo(px - r * 0.45, py - r * 0.2);
+    ctx.lineTo(px, py);
+    ctx.lineTo(px + r * 0.45, py - r * 0.2);
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(px - r * 0.15, py + r * 0.1);
+    ctx.lineTo(px - r * 0.45, py + r * 0.55);
+    ctx.lineTo(px + r * 0.1,  py + r * 0.4);
+    ctx.closePath();
+    ctx.stroke();
+
+    // highlight
+    ctx.beginPath();
+    ctx.arc(px - r * 0.35, py - r * 0.35, r * 0.18, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fill();
+}
+
+function drawBall(x, y) {
+    const p = gridToPx(x, y);
+    drawBallAtPixel(p.x, p.y);
+}
+
+// ----------------------------------------------------
+// RYSOWANIE CAŁOŚCI
+// ----------------------------------------------------
+function drawBoard() {
+    if (!ctx || !canvas) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     drawStands();
     drawPitch();
-    drawGrid();
-    drawLines();
-    drawBall();
 
-    // overlay dla końca gry
-    if (gameOver) {
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    // siatka punktów
+    for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+            drawPoint(x, y);
+        }
+    }
 
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 36px Arial";
-        ctx.textAlign = "center";
-        ctx.fillText("KONIEC", canvasWidth / 2, canvasHeight / 2 - 10);
+    // linie ruchów
+    for (let line of usedLines) {
+        drawLine(line.x1, line.y1, line.x2, line.y2);
+    }
 
-        ctx.font = "20px Arial";
-        const msg = winner === 0 ? "Remis!" : (winner === myPlayer ? "Wygrałeś!" : "Przegrałeś!");
-        ctx.fillText(msg, canvasWidth / 2, canvasHeight / 2 + 30);
+    // piłka (jeśli nie trwa animacja)
+    if (!animating) {
+        drawBall(ball.x, ball.y);
     }
 }
 
 // ----------------------------------------------------
-// LOGIKA RUCHU – WALIDACJA
+// LOGIKA – linie, ruchy, odbicia
 // ----------------------------------------------------
-
 function isLineUsed(x1, y1, x2, y2) {
     return usedLines.some(l =>
-        (l.x1 === x1 && l.y1 === y1 && l.x2 === x2 && l.y2 === y2) ||
-        (l.x1 === x2 && l.y1 === y2 && l.x2 === x1 && l.y2 === y1)
-    );
-}
-
-function addLine(x1, y1, x2, y2) {
-    usedLines.push({ x1, y1, x2, y2 });
-}
-
-// walidacja ruchu – z zakazem jazdy wzdłuż ściany
-function isValidMove(x, y) {
-    // poza planszą
-    if (x < 0 || x >= cols || y < 0 || y >= rows) return false;
-
-    // dozwolone 8 kierunków, ale tylko o 1
-    const dx = Math.abs(x - ball.x);
-    const dy = Math.abs(y - ball.y);
-    if (dx > 1 || dy > 1 || (dx === 0 && dy === 0)) return false;
-
-    // linia nie może się powtórzyć
-    if (isLineUsed(ball.x, ball.y, x, y)) return false;
-
-    // zakaz jazdy wzdłuż ściany
-    const leftSlide   = (ball.x === 0       && x === 0       && ball.y !== y);
-    const rightSlide  = (ball.x === cols-1  && x === cols-1  && ball.y !== y);
-    const topSlide    = (ball.y === 0       && y === 0       && ball.x !== x);
-    const bottomSlide = (ball.y === rows-1  && y === rows-1  && ball.x !== x);
-
-    if (leftSlide || rightSlide || topSlide || bottomSlide) return false;
-
-    return true;
-}
-
-function hasBounce(x, y) {
-    // odbicie od ściany
-    if (x === 0 || x === cols - 1) return true;
-    if (y === 0 || y === rows - 1) return true;
-
-    // odbicie na skrzyżowaniu (gdy punkt jest już częścią >=2 linii)
-    let deg = 0;
-    for (let l of usedLines) {
-        if ((l.x1 === x && l.y1 === y) || (l.x2 === x && l.y2 === y)) {
-            deg++;
-            if (deg >= 2) return true;
-        }
-    }
-    return false;
-}
-
-function isGoal(x, y) {
-    // gol dla gracza 2 (u góry)
-    if (y === goalTop.y && x >= goalTop.xStart && x <= goalTop.xEnd) return 2;
-    // gol dla gracza 1 (na dole)
-    if (y === goalBottom.y && x >= goalBottom.xStart && x <= goalBottom.xEnd) return 1;
-    return 0;
-}
-
-function getPointFromMouse(evt) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = evt.clientX - rect.left;
-    const my = evt.clientY - rect.top;
-
-    if (!isInsideBoard(mx, my)) return null;
-
-    // znajdź najbliższy punkt siatki
-    const gx = Math.round((mx - boardOffsetX) / cellSize);
-    const gy = Math.round((my - boardOffsetY) / cellSize);
-
-    return { x: gx, y: gy };
-}
-
-// ----------------------------------------------------
-// RUCH GRACZA
-// ----------------------------------------------------
-
-async function sendMove(toX, toY) {
-    if (gameOver) return;
-
-    const extra = hasBounce(toX, toY) ? 1 : 0;
-    const goal = isGoal(toX, toY);
-    const draw = 0; // backend może ustawić, tu zostawiamy 0
-
-    const payload = new URLSearchParams();
-    payload.set("game_id", gameId);
-    payload.set("from_x", ball.x);
-    payload.set("from_y", ball.y);
-    payload.set("to_x", toX);
-    payload.set("to_y", toY);
-    payload.set("extra", extra);
-    payload.set("goal", goal ? 1 : 0);
-    payload.set("draw", draw);
-
-    const res = await fetch("move.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: payload.toString()
-    });
-
-    const data = await res.json();
-    if (data.error) {
-        setMessage(data.error);
-        return;
-    }
-
-    // lokalna aktualizacja (opcjonalna)
-    addLine(ball.x, ball.y, toX, toY);
-    ball.x = toX;
-    ball.y = toY;
-
-    // odśwież stan z serwera
-    await syncGame();
-}
-
-if (canvas) {
-    canvas.addEventListener("click", async (evt) => {
-        if (!gameId) return;
-        if (gameOver) return;
-
-        if (currentPlayer !== myPlayer) {
-            setMessage("Nie Twoja tura.");
-            return;
-        }
-
-        const p = getPointFromMouse(evt);
-        if (!p) return;
-
-        if (!isValidMove(p.x, p.y)) {
-            setMessage("Nielegalny ruch.");
-            return;
-        }
-
-        setMessage("");
-        await sendMove(p.x, p.y);
-    });
-}
-
-// ----------------------------------------------------
-// SYNC STANU Z SERWERA
-// ----------------------------------------------------
-
-async function syncGame() {
-    if (!gameId) return;
-
-    const res = await fetch(`state.php?game_id=${gameId}`, { cache: "no-store" });
-    const data = await res.json();
-    if (data.error) {
-        setMessage(data.error);
-        return;
-    }
-
-    const g = data.game;
-    status = g.status;
-    winner = g.winner;
-    currentPlayer = g.current_player;
-
-    setStatus(`Status: ${status} | Tura: Gracz ${currentPlayer}`);
-
-    setPlayers(g.player1_name, g.player2_name);
-
-    // odtworzenie linii / piłki od zera
-    usedLines = [];
-    ball = { x: 4, y: 6 };
-
-    const moves = data.moves || [];
-    for (let mv of moves) {
-        // POPRAWKA: DB/PHP zwraca liczby jako stringi — ujednolicamy typy
-        addLine(Number(mv.from_x), Number(mv.from_y), Number(mv.to_x), Number(mv.to_y));
-        ball.x = Number(mv.to_x);
-        ball.y = Number(mv.to_y);
-    }
-
-    // koniec gry?
-    gameOver = (status === "finished");
-    drawBoard();
-}
-
-// start + rewanż
-if (canvas && ctx) {
-    drawBoard();
-    syncGame();
-
-    // auto-sync co 1s
-    setInterval(syncGame, 1000);
-}
-
-// ----------------------------------------------------
-// INICJALIZACJA Z DANYCH WSTRZYKNIĘTYCH Z PHP
-// ----------------------------------------------------
-if (window.PS_GAME_ID) gameId = window.PS_GAME_ID;
-if (window.PS_MY_PLAYER) myPlayer = window.PS_MY_PLAYER;
+        (l.x1 === x1 && l.y1 === y1 &
