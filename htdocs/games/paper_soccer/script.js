@@ -152,8 +152,9 @@ function drawPitch() {
     ctx.rect(gx + 6, gy + 6, bw - 12, bh - 12);
 
     // linia środkowa
-    ctx.moveTo(gx + bw / 2, gy + 6);
-    ctx.lineTo(gx + bw / 2, gy + bh - 6);
+    ctx.moveTo(gx + 6,       gy + bh / 2);
+    ctx.lineTo(gx + bw - 6, gy + bh / 2);
+
 
     // koło środkowe
     const center = gridToPx(4, 6);
