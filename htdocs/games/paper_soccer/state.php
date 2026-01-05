@@ -23,11 +23,13 @@ $game = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
 if (!$game) {
-    echo json_encode(["error" => "Nie znaleziono gry."]);
+    echo json_encode(["error" => "Gra nie istnieje."]);
     exit;
 }
 
-// dla zalogowanych — nazwa z users
+// -----------------------------
+// NAZWY GRACZY
+// -----------------------------
 function username_from_id($id) {
     global $conn;
     if ($id === null || $id == 0) return null;
@@ -41,16 +43,11 @@ function username_from_id($id) {
     return $row ? $row['username'] : null;
 }
 
-// docelowo bierzemy nazwę z DB — bo zapisujesz player*_name
-$player1_name = $game['player1_name'] ?? null;
-$player2_name = $game['player2_name'] ?? null;
+$player1_name = $game["player1_name"];
+$player2_name = $game["player2_name"];
 
-if (!$player1_name) {
-    $player1_name = username_from_id($game['player1_id']);
-}
-if (!$player2_name) {
-    $player2_name = username_from_id($game['player2_id']);
-}
+if (!$player1_name) $player1_name = username_from_id($game["player1_id"]);
+if (!$player2_name) $player2_name = username_from_id($game["player2_id"]);
 
 if (!$player1_name) $player1_name = "Gość";
 if (!$player2_name) $player2_name = "Gość";
@@ -65,7 +62,6 @@ $stmt->execute();
 $res = $stmt->get_result();
 
 while ($row = $res->fetch_assoc()) {
-    // DB często zwraca liczby jako stringi — ujednolicamy typy
     foreach (["id","game_id","move_no","player","from_x","from_y","to_x","to_y"] as $k) {
         if (isset($row[$k])) $row[$k] = (int)$row[$k];
     }
