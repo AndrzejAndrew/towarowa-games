@@ -314,4 +314,386 @@ function drawBoard() {
 // ----------------------------------------------------
 function isLineUsed(x1, y1, x2, y2) {
     return usedLines.some(l =>
-        (l.x1 === x1 && l.y1 === y1 &
+        (l.x1 === x1 && l.y1 === y1 && l.x2 === x2 && l.y2 === y2) ||
+        (l.x1 === x2 && l.y1 === y2 && l.x2 === x1 && l.y2 === y1)
+    );
+}
+
+function addLine(x1, y1, x2, y2) {
+    usedLines.push({ x1, y1, x2, y2 });
+}
+
+// walidacja ruchu – z zakazem jazdy wzdłuż ściany
+function isValidMove(x, y) {
+    if (x < 0 || x >= cols || y < 0 || y >= rows) return false;
+
+    const dx = Math.abs(x - ball.x);
+    const dy = Math.abs(y - ball.y);
+
+    if (dx > 1 || dy > 1 || (dx === 0 && dy === 0)) return false;
+
+    if (isLineUsed(ball.x, ball.y, x, y)) return false;
+
+    const onLeftWallSlide   = (ball.x === 0        && x === 0        && ball.y !== y);
+    const onRightWallSlide  = (ball.x === cols - 1 && x === cols - 1 && ball.y !== y);
+    const onTopWallSlide    = (ball.y === 0        && y === 0        && ball.x !== x);
+    const onBottomWallSlide = (ball.y === rows - 1 && y === rows - 1 && ball.x !== x);
+
+    if (onLeftWallSlide || onRightWallSlide || onTopWallSlide || onBottomWallSlide) {
+        return false;
+    }
+
+    return true;
+}
+
+// odbicie
+function hasBounce(x, y) {
+    if (x === 0 || x === cols - 1) return true;
+    if (y === 0 || y === rows - 1) return true;
+
+    let degree = 0;
+    for (let line of usedLines) {
+        if ((line.x1 === x && line.y1 === y) || (line.x2 === x && line.y2 === y)) {
+            degree++;
+            if (degree >= 2) return true;
+        }
+    }
+    return false;
+}
+
+// bramka
+function isGoal(x, y) {
+    if (y === goalBottom.y && x >= goalBottom.xStart && x <= goalBottom.xEnd) return 1;
+    if (y === goalTop.y    && x >= goalTop.xStart    && x <= goalTop.xEnd)    return 2;
+    return 0;
+}
+
+// ----------------------------------------------------
+// ANIMACJA PIŁKI
+// ----------------------------------------------------
+function startBallAnimation(fromX, fromY, toX, toY) {
+    animating     = true;
+    animStartTime = performance.now();
+    animFrom      = gridToPx(fromX, fromY);
+    animTo        = gridToPx(toX,   toY);
+
+    function step(now) {
+        if (!animating) return;
+
+        const t = Math.min(1, (now - animStartTime) / animDuration);
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+        const x = animFrom.x + (animTo.x - animFrom.x) * ease;
+        const y = animFrom.y + (animTo.y - animFrom.y) * ease;
+
+        drawBoard();
+        drawBallAtPixel(x, y);
+
+        if (t < 1) requestAnimationFrame(step);
+        else {
+            animating = false;
+            drawBoard();
+        }
+    }
+
+    requestAnimationFrame(step);
+}
+
+// ----------------------------------------------------
+// WYKONANIE RUCHU + WYSŁANIE DO BACKENDU
+// ----------------------------------------------------
+function makeMove(x, y) {
+    if (isSendingMove) return;
+
+    const prev = { x: ball.x, y: ball.y };
+
+    const goal = isGoal(x, y);
+    if (goal) {
+        addLine(ball.x, ball.y, x, y);
+        ball.x = x;
+        ball.y = y;
+        startBallAnimation(prev.x, prev.y, x, y);
+        sendMove(prev.x, prev.y, x, y, 0, 1, 0);
+        return;
+    }
+
+    addLine(ball.x, ball.y, x, y);
+    ball.x = x;
+    ball.y = y;
+
+    const extra = hasBounce(x, y) ? 1 : 0;
+    startBallAnimation(prev.x, prev.y, x, y);
+    sendMove(prev.x, prev.y, x, y, extra, 0, 0);
+}
+
+// ----------------------------------------------------
+// KLIK NA PLANSZY
+// ----------------------------------------------------
+if (canvas && ctx) {
+    canvas.addEventListener("click", function (e) {
+        if (canvas.style.pointerEvents === "none") return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        const x = Math.round((mx - boardOffsetX) / cellSize);
+        const y = Math.round((my - boardOffsetY) / cellSize);
+
+        if (!isValidMove(x, y)) return;
+
+        makeMove(x, y);
+    });
+}
+
+// ----------------------------------------------------
+// WYŚLIJ RUCH DO BACKENDU
+// ----------------------------------------------------
+function sendMove(fromX, fromY, toX, toY, extra, goal, draw) {
+    if (!ajaxGameID) return;
+
+    isSendingMove = true;
+
+    const data = new FormData();
+    data.append("game_id", ajaxGameID);
+    data.append("from_x", fromX);
+    data.append("from_y", fromY);
+    data.append("to_x", toX);
+    data.append("to_y", toY);
+    data.append("extra", extra ? 1 : 0);
+    data.append("goal", goal ? 1 : 0);
+    data.append("draw", draw ? 1 : 0);
+
+    fetch("move.php", { method: "POST", body: data })
+        .then(async (r) => {
+            const raw = await r.text();
+            console.log("move.php RAW RESPONSE:", raw);
+
+            if (!r.ok) {
+                alert("Serwer zwrócił błąd HTTP " + r.status + ". Odpowiedź:\n\n" + raw.slice(0, 400));
+                throw new Error("HTTP " + r.status);
+            }
+
+            let resp;
+            try { resp = JSON.parse(raw); }
+            catch (e) {
+                alert("Serwer zwrócił niepoprawny JSON.\nPoczątek:\n\n" + raw.slice(0, 400));
+                throw e;
+            }
+
+            if (resp && resp.error) alert("Błąd z move.php: " + resp.error);
+
+            syncGame();
+        })
+        .catch(err => {
+            console.error("Błąd podczas wysyłania ruchu move.php:", err);
+            alert("Wystąpił błąd po stronie serwera przy wysyłaniu ruchu.");
+        })
+        .finally(() => { isSendingMove = false; });
+}
+
+// ----------------------------------------------------
+// SYNC PVP/BOT – co 700 ms
+// ----------------------------------------------------
+function syncGame() {
+    if (!ajaxGameID || !canvas || !ctx) return;
+
+    const infoTurn = document.getElementById("ps-turn-info");
+
+    fetch("state.php?game_id=" + encodeURIComponent(ajaxGameID))
+        .then(async (r) => {
+            const raw = await r.text();
+
+            if (!r.ok) {
+                if (infoTurn) infoTurn.textContent = "Błąd state.php: HTTP " + r.status;
+                console.error("state.php HTTP error", r.status, raw.slice(0, 400));
+                throw new Error("HTTP " + r.status);
+            }
+
+            try {
+                return JSON.parse(raw);
+            } catch (e) {
+                if (infoTurn) infoTurn.textContent = "Błąd state.php: niepoprawny JSON";
+                console.error("state.php JSON parse error", raw.slice(0, 400));
+                throw e;
+            }
+        })
+        .then(state => {
+            const p1NameEl = document.getElementById("ps-p1-name");
+            const p2NameEl = document.getElementById("ps-p2-name");
+            const p1GoalEl = document.getElementById("ps-p1-goal");
+            const p2GoalEl = document.getElementById("ps-p2-goal");
+            const scoreEl  = document.getElementById("ps-score");
+
+            if (!state || !state.game) {
+                if (infoTurn) infoTurn.textContent = "Błąd stanu gry.";
+                return;
+            }
+
+            if (state.error) {
+                if (infoTurn) infoTurn.textContent = "Błąd: " + state.error;
+                return;
+            }
+
+            const p1Name = state.game.player1_name || "Gracz 1";
+            const p2Name = state.game.player2_name || "Gracz 2";
+
+            if (p1NameEl) p1NameEl.textContent = p1Name;
+            if (p2NameEl) p2NameEl.textContent = p2Name;
+
+            // POPRAWKA: opisy bramek zależne od tego, kim jesteś
+            if (ajaxPlayer === 1) {
+                if (p1GoalEl) p1GoalEl.textContent = "Atakujesz bramkę na dole";
+                if (p2GoalEl) p2GoalEl.textContent = "Przeciwnik atakuje bramkę u góry";
+            } else if (ajaxPlayer === 2) {
+                if (p1GoalEl) p1GoalEl.textContent = "Przeciwnik atakuje bramkę na dole";
+                if (p2GoalEl) p2GoalEl.textContent = "Atakujesz bramkę u góry";
+            }
+
+            // localStorage wynik (tylko raz)
+            if (!scoresLoaded) {
+                scoreKey = "ps_score_" + p1Name + "_" + p2Name;
+                try {
+                    const stored = localStorage.getItem(scoreKey);
+                    if (stored) {
+                        const parsed = JSON.parse(stored);
+                        scoreP1 = parsed.p1 || 0;
+                        scoreP2 = parsed.p2 || 0;
+                    }
+                } catch (e) {
+                    console.warn("Nie udało się odczytać wyniku z localStorage:", e);
+                }
+                if (scoreEl) scoreEl.textContent = scoreP1 + " : " + scoreP2;
+                scoresLoaded = true;
+            }
+
+            // OCZEKIWANIE
+            if (state.game.status === "waiting") {
+                if (infoTurn) infoTurn.textContent = "Oczekiwanie na drugiego gracza...";
+                canvas.style.pointerEvents = "none";
+                return;
+            }
+
+            // KONIEC GRY
+            if (state.game.status === "finished") {
+
+                if (Array.isArray(state.moves) && state.moves.length !== movesLoaded) {
+                    reloadMoves(state.moves);
+                    movesLoaded = state.moves.length;
+                }
+
+                let reason = "nomove";
+                if (state.game.winner == 0) reason = "draw";
+
+                if (Array.isArray(state.moves) && state.moves.length > 0) {
+                    const last = state.moves[state.moves.length - 1];
+                    const lx = Number(last.to_x);
+                    const ly = Number(last.to_y);
+
+                    if (
+                        (ly === goalTop.y    && lx >= goalTop.xStart    && lx <= goalTop.xEnd) ||
+                        (ly === goalBottom.y && lx >= goalBottom.xStart && lx <= goalBottom.xEnd)
+                    ) {
+                        reason = "goal";
+                    }
+                }
+
+                const winner = parseInt(state.game.winner, 10);
+                const me = ajaxPlayer;
+
+                if (!scoreCountedForGame) {
+                    if (winner === 1) scoreP1++;
+                    else if (winner === 2) scoreP2++;
+
+                    if (scoreEl) scoreEl.textContent = scoreP1 + " : " + scoreP2;
+
+                    if (scoreKey) {
+                        try {
+                            localStorage.setItem(scoreKey, JSON.stringify({ p1: scoreP1, p2: scoreP2 }));
+                        } catch (e) {
+                            console.warn("Nie udało się zapisać wyniku do localStorage:", e);
+                        }
+                    }
+                    scoreCountedForGame = true;
+                }
+
+                if (infoTurn) {
+                    let msg = "";
+
+                    if (winner === 0 || reason === "draw") {
+                        msg = "🤝 Gra zakończona remisem.";
+                    } else if (winner === me) {
+                        msg = (reason === "goal")
+                            ? "🏆 Gratulacje, wygrałeś! Strzeliłeś gola!"
+                            : "🏆 Gratulacje, wygrałeś! Przeciwnik nie ma ruchu!";
+                    } else {
+                        msg = (reason === "goal")
+                            ? "❌ Niestety, przegrałeś! Straciłeś gola!"
+                            : "❌ Niestety, przegrałeś! Nie masz ruchu!";
+                    }
+
+                    infoTurn.innerHTML = msg;
+                }
+
+                canvas.style.pointerEvents = "none";
+
+                const rematchBtn = document.getElementById("ps-rematch");
+                if (rematchBtn) rematchBtn.style.display = "inline-block";
+
+                return;
+            }
+
+            // CZYJA KOLEJ?
+            if (state.game.current_player == ajaxPlayer) {
+                if (infoTurn) infoTurn.innerHTML = "👉 Twoja kolej";
+                canvas.style.pointerEvents = "auto";
+            } else {
+                if (infoTurn) infoTurn.innerHTML = "⏳ Kolej przeciwnika";
+                canvas.style.pointerEvents = "none";
+            }
+
+            // Nowe ruchy
+            if (Array.isArray(state.moves) && state.moves.length !== movesLoaded) {
+                reloadMoves(state.moves);
+                movesLoaded = state.moves.length;
+            }
+        })
+        .catch(err => {
+            console.error("Błąd podczas pobierania state.php:", err);
+        });
+}
+
+// ----------------------------------------------------
+// ODTWARZANIE ruchów z bazy
+// ----------------------------------------------------
+function reloadMoves(moves) {
+    usedLines = [];
+    ball = { x: 4, y: 6 };
+
+    for (let mv of moves) {
+        // POPRAWKA: rzutowanie na Number() – dokładnie o to chodziło
+        addLine(Number(mv.from_x), Number(mv.from_y), Number(mv.to_x), Number(mv.to_y));
+        ball.x = Number(mv.to_x);
+        ball.y = Number(mv.to_y);
+    }
+    drawBoard();
+}
+
+// start + rewanż
+if (canvas && ctx) {
+    drawBoard();
+    syncGame();
+    setInterval(syncGame, 700);
+}
+
+const rematchBtn = document.getElementById("ps-rematch");
+if (rematchBtn && canvas) {
+    rematchBtn.addEventListener("click", function () {
+        if (gameMode === "bot") {
+            window.location.href =
+                "create_game.php?mode=bot&bot_difficulty=" + encodeURIComponent(botDiff);
+        } else {
+            window.location.href = "pvp.php";
+        }
+    });
+}
