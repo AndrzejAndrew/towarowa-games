@@ -15,75 +15,69 @@
     margin-bottom: 30px;
 }
 
-.ps-modes {
+.ps-mode-selector .mode-buttons {
     display: flex;
+    justify-content: center;
+    gap: 15px;
     flex-wrap: wrap;
-    gap: 20px;
 }
 
-.ps-mode-card {
-    flex: 1 1 280px;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    padding: 15px;
-    background: #f9f9f9;
-}
-
-.ps-mode-card button[disabled],
-.ps-mode-card select[disabled] {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-
-.ps-board-wrapper {
-    margin-bottom: 30px;
-}
-
-.ps-board {
-    width: 100%;
-    max-width: 600px;
-    aspect-ratio: 4 / 3;
-    border: 2px solid #000;
-    background: #ffffff; /* jasne tło */
-    margin: 20px auto;
-}
-
-
-.ps-placeholder {
-    color: #777;
-    text-align: center;
-    padding: 10px;
-}
-
-.ps-info-section {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px;
-}
-
-.ps-rules,
-.ps-ranking {
-    flex: 1 1 300px;
-    border: 1px solid #eee;
-    border-radius: 8px;
-    padding: 15px;
-    background: #fafafa;
-}
-
-.player-panel {
-    padding: 10px;
-    font-size: 22px;
+.ps-mode-selector .mode-buttons a {
+    background: #222;
     color: #fff;
-    background: #333;
-    border-radius: 8px;
-    margin-bottom: 15px;
-    text-align: center;
+    padding: 12px 18px;
+    border-radius: 10px;
+    text-decoration: none;
+    transition: transform 0.15s ease, background 0.15s ease;
+    font-weight: 600;
 }
-/* Tło gry – papier szkolny */
-body {
-    background: #dfe7f2 url('https://i.imgur.com/2s5VQPr.png');
-    background-size: 800px;
-    background-repeat: repeat;
+
+.ps-mode-selector .mode-buttons a:hover {
+    background: #333;
+    transform: translateY(-2px);
+}
+
+.ps-game-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+/* Panel statusu */
+.ps-info-panel {
+    width: 100%;
+    max-width: 900px;
+    background: rgba(0,0,0,0.35);
+    color: #fff;
+    border-radius: 12px;
+    padding: 12px 16px;
+    display: grid;
+    gap: 8px;
+}
+
+.ps-info-panel .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.ps-info-panel .row span {
+    opacity: 0.95;
+}
+
+#ps-message {
+    color: #ffd200;
+    font-weight: 700;
+    min-height: 20px;
+}
+
+/* Kontener canvas */
+.ps-board-wrapper {
+    display: flex;
+    justify-content: center;
+    width: 100%;
 }
 
 /* Boisko do piłki nożnej */
@@ -109,11 +103,11 @@ body {
     box-sizing: border-box;
 }
 
-/* Linia środkowa */
+/* Linia środkowa (w poprzek boiska) */
 #ps-board::before {
-    border-right: 2px solid rgba(255, 255, 255, 0.7);
-    width: 50%;
-    height: 100%;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.7);
+    width: 100%;
+    height: 50%;
     top: 0;
     left: 0;
 }
