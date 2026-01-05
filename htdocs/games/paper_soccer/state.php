@@ -23,13 +23,9 @@ $game = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
 if (!$game) {
-    echo json_encode(["error" => "Gra nie istnieje."]);
+    echo json_encode(["error" => "Nie znaleziono gry."]);
     exit;
 }
-
-// -----------------------------
-// NAZWY GRACZY
-// -----------------------------
 
 // dla zalogowanych — nazwa z users
 function username_from_id($id) {
@@ -45,29 +41,34 @@ function username_from_id($id) {
     return $row ? $row['username'] : null;
 }
 
-// docelowo bierzemy nazwę z DB — bo zapisaliśmy ją przy tworzeniu gry
-$player1_name = $game["player1_name"];
-$player2_name = $game["player2_name"];
+// docelowo bierzemy nazwę z DB — bo zapisujesz player*_name
+$player1_name = $game['player1_name'] ?? null;
+$player2_name = $game['player2_name'] ?? null;
 
-// jeśli gracz jest zalogowany, ale w DB nazwy nie ma (fallback)
-if (!$player1_name) $player1_name = username_from_id($game["player1_id"]);
-if (!$player2_name) $player2_name = username_from_id($game["player2_id"]);
+if (!$player1_name) {
+    $player1_name = username_from_id($game['player1_id']);
+}
+if (!$player2_name) {
+    $player2_name = username_from_id($game['player2_id']);
+}
 
-// ostateczny fallback
 if (!$player1_name) $player1_name = "Gość";
 if (!$player2_name) $player2_name = "Gość";
-
 
 // -----------------------------
 // POBRANIE RUCHÓW GRY
 // -----------------------------
 $moves = [];
-$stmt = $conn->prepare("SELECT * FROM paper_soccer_moves WHERE game_id=? ORDER BY id ASC");
+$stmt = $conn->prepare("SELECT * FROM paper_soccer_moves WHERE game_id=? ORDER BY move_no ASC, id ASC");
 $stmt->bind_param("i", $game_id);
 $stmt->execute();
 $res = $stmt->get_result();
 
 while ($row = $res->fetch_assoc()) {
+    // DB często zwraca liczby jako stringi — ujednolicamy typy
+    foreach (["id","game_id","move_no","player","from_x","from_y","to_x","to_y"] as $k) {
+        if (isset($row[$k])) $row[$k] = (int)$row[$k];
+    }
     $moves[] = $row;
 }
 $stmt->close();
@@ -78,8 +79,8 @@ $stmt->close();
 echo json_encode([
     "game" => [
         "status"         => $game["status"],
-        "winner"         => $game["winner"],
-        "current_player" => $game["current_player"],
+        "winner"         => (int)$game["winner"],
+        "current_player" => (int)$game["current_player"],
         "player1_name"   => $player1_name,
         "player2_name"   => $player2_name
     ],

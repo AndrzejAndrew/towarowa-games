@@ -18,24 +18,28 @@ function random_code($len = 6) {
     return $o;
 }
 
-$code = random_code();
-
-// Identyfikacja gracza 1
-$player1_id  = is_logged_in() ? (int)$_SESSION['user_id'] : (int)$_SESSION['guest_id'];
+// ID + nazwa gracza 1
+$player1_id = is_logged_in() ? (int)$_SESSION['user_id'] : (int)$_SESSION['guest_id'];
 $player1_name = is_logged_in() ? $_SESSION['username'] : $_SESSION['guest_name'];
+
+$code = random_code(6);
 
 if ($mode === 'bot') {
 
     $difficulty = (int)($_POST['bot_difficulty'] ?? $_GET['bot_difficulty'] ?? 1);
+    // dopuszczalne poziomy: 1..4
+    $difficulty = max(1, min(4, $difficulty));
 
     $stmt = $conn->prepare("
         INSERT INTO paper_soccer_games (
             code, mode, bot_difficulty,
             player1_id, player1_name,
             player2_id, player2_name,
-            status, current_player
+            current_player, winner, status, move_no
         ) VALUES (
-            ?, 'bot', ?, ?, ?, 0, NULL, 'playing', 1
+            ?, 'bot', ?,
+            ?, ?, 0, 'BOT',
+            1, 0, 'playing', 1
         )
     ");
 
@@ -48,7 +52,7 @@ if ($mode === 'bot') {
             code, mode, bot_difficulty,
             player1_id, player1_name,
             player2_id, player2_name,
-            status, current_player
+            current_player, winner, status, move_no
         ) VALUES (
             ?, 'pvp', NULL, ?, ?, 0, NULL, 'waiting', 1
         )
