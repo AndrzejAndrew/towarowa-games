@@ -1,7 +1,7 @@
 <?php
 
 // ================================================
-// BOT — 4 poziomy trudności
+// BOT — 3 poziomy trudności
 // ================================================
 
 // ------------------------------------------------
@@ -76,42 +76,6 @@ function ps_backend_has_bounce(int $x, int $y, array $usedLines): bool
 }
 
 // ------------------------------------------------
-// NOWY HELPER DLA BOTA EKSPERTA
-// Sprawdza, czy ruch z A do B, stworzy dla przeciwnika
-// możliwość odbicia z punktu B.
-// ------------------------------------------------
-function ps_is_opponent_bounce_setup(int $fromX, int $fromY, int $toX, int $toY, array $usedLines): bool
-{
-    // 1) Symulujemy dodanie nowej linii do planszy
-    $futureUsedLines = $usedLines;
-    $futureUsedLines[] = ['x1' => $fromX, 'y1' => $fromY, 'x2' => $toX, 'y2' => $toY];
-
-    // 2) Sprawdzamy wszystkie możliwe ruchy z punktu docelowego (toX, toY)
-    for ($dx = -1; $dx <= 1; $dx++) {
-        for ($dy = -1; $dy <= 1; $dy++) {
-            if ($dx === 0 && $dy === 0) continue;
-
-            $nextX = $toX + $dx;
-            $nextY = $toY + $dy;
-
-            // 3) Czy potencjalny ruch przeciwnika jest poprawny?
-            if (ps_is_valid_move_backend($toX, $toY, $nextX, $nextY, $futureUsedLines)) {
-                
-                // 4) Jeśli tak, to czy daje mu odbicie?
-                if (ps_backend_has_bounce($nextX, $nextY, $futureUsedLines)) {
-                    // Ten ruch jest zły, bo ustawia przeciwnika.
-                    return true;
-                }
-            }
-        }
-    }
-
-    // Żaden z ruchów przeciwnika nie dawał mu odbicia.
-    return false;
-}
-
-
-// ------------------------------------------------
 // 4) Bot wybiera ruch — z filtrowaniem nielegalnych ruchów
 // ------------------------------------------------
 function bot_choose_move(array $ball, array $usedLines, int $difficulty = 1): ?array
@@ -174,34 +138,6 @@ function bot_choose_move(array $ball, array $usedLines, int $difficulty = 1): ?a
         return $moves[0];
     }
 
-    // POZIOM 4 (ekspert)
-    if ($difficulty == 4) {
-        // A) Gol ma absolutny priorytet
-        foreach ($moves as $m) {
-            if ($m['y'] == 0 && $m['x'] >= 3 && $m['x'] <= 5) {
-                return $m;
-            }
-        }
-
-        $expertScoreFn = function ($m) use ($x, $y, $scoreFn, $usedLines) {
-            $score = $scoreFn($m);
-
-            // B) Własny ruch z odbiciem to duży plus
-            if (ps_backend_has_bounce($m['x'], $m['y'], $usedLines)) {
-                $score += 500;
-            }
-
-            // C) Unikanie dawania przeciwnikowi odbicia to kluczowa defensywa
-            if (ps_is_opponent_bounce_setup($x, $y, $m['x'], $m['y'], $usedLines)) {
-                $score -= 1000;
-            }
-            return $score;
-        };
-        
-        usort($moves, fn($a, $b) => $expertScoreFn($b) <=> $expertScoreFn($a));
-        return $moves[0];
-    }
-
     // POZIOM 3 (trudny)
     // A) gol
     foreach ($moves as $m) {
@@ -236,3 +172,4 @@ function bot_choose_move(array $ball, array $usedLines, int $difficulty = 1): ?a
     usort($moves, fn($a, $b) => $scoreFn($b) <=> $scoreFn($a));
     return $moves[0];
 }
+
