@@ -101,10 +101,11 @@ function stats_add_xp(
 
     if ($user_id <= 0 || $xp_delta === 0) return false;
 
-    $allowed = ['game_win','game_loss','game_draw','game_played','bonus','badge'];
-    if (!in_array($event_type, $allowed, true)) {
-        return false;
-    }
+  // event_type bywa np. "achievement:xxx" (z achievements.php) – nie blokujemy tego
+if ($event_type === '') {
+    $event_type = 'unknown';
+}
+
 
     $stmt = stats_prepare(
         "INSERT INTO xp_log (user_id, game_code, event_type, xp_delta, related_result_id, season_id)
