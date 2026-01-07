@@ -18,16 +18,16 @@ function random_code($len = 6) {
     return $o;
 }
 
-$code = random_code();
-
-// Identyfikacja gracza 1
-$player1_id  = is_logged_in() ? (int)$_SESSION['user_id'] : (int)$_SESSION['guest_id'];
+// ID + nazwa gracza 1
+$player1_id = is_logged_in() ? (int)$_SESSION['user_id'] : (int)$_SESSION['guest_id'];
 $player1_name = is_logged_in() ? $_SESSION['username'] : $_SESSION['guest_name'];
+
+$code = random_code(6);
 
 if ($mode === 'bot') {
 
-    $difficulty_raw = (int)($_POST['bot_difficulty'] ?? $_GET['bot_difficulty'] ?? 1);
-    $difficulty = max(1, min(4, $difficulty_raw));
+    $difficulty = (int)($_POST['bot_difficulty'] ?? $_GET['bot_difficulty'] ?? 1);
+    $difficulty = max(1, min(4, $difficulty)); // NOWE: 1..4
 
     $stmt = $conn->prepare("
         INSERT INTO paper_soccer_games (
@@ -36,9 +36,13 @@ if ($mode === 'bot') {
             player2_id, player2_name,
             status, current_player
         ) VALUES (
-            ?, 'bot', ?, ?, ?, 0, 'BOT', 'playing', 1
+            ?, 'bot', ?, ?, ?, 0, NULL, 'playing', 1
         )
     ");
+
+    if (!$stmt) {
+        die("SQL prepare error: " . $conn->error);
+    }
 
     $stmt->bind_param("siis", $code, $difficulty, $player1_id, $player1_name);
 
@@ -55,6 +59,10 @@ if ($mode === 'bot') {
         )
     ");
 
+    if (!$stmt) {
+        die("SQL prepare error: " . $conn->error);
+    }
+
     $stmt->bind_param("sis", $code, $player1_id, $player1_name);
 }
 
@@ -62,6 +70,5 @@ $stmt->execute();
 $game_id = $stmt->insert_id;
 $stmt->close();
 
-// przekieruj do lobby/gry
-header("Location: index.php?game_id=" . $game_id);
+header("Location: play.php?game_id=" . $game_id);
 exit;
