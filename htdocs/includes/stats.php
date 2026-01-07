@@ -5,6 +5,30 @@
 require_once __DIR__ . '/db.php';
 
 // ------------------------------------------------
+//  Bezpieczne prepare + log (żeby nie robić HTTP 500 po udanym ruchu)
+//  Log: htdocs/includes/stats_errors.log
+// ------------------------------------------------
+function stats_log(string $msg): void {
+    $line = date('Y-m-d H:i:s ') . $msg . "\n";
+    @file_put_contents(__DIR__ . '/stats_errors.log', $line, FILE_APPEND);
+}
+
+/**
+ * Zwraca mysqli_stmt albo null, jeśli prepare() się nie uda.
+ * Dzięki temu bind_param() nie robi FATAL i nie rozwala odpowiedzi JSON w grach.
+ */
+function stats_prepare(string $sql): ?mysqli_stmt {
+    global $conn;
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        $compact = preg_replace('/\s+/', ' ', trim($sql));
+        stats_log('PREPARE FAILED: ' . ($conn->error ?? 'unknown') . ' | SQL: ' . $compact);
+        return null;
+    }
+    return $stmt;
+}
+
+// ------------------------------------------------
 //  XP VALUES (tuning)
 // ------------------------------------------------
 const XP_PLAYED = 5;           // zawsze za rozegranie (po zakończeniu gry)
@@ -52,7 +76,8 @@ function stats_user_exists(int $user_id): bool {
     global $conn;
     if ($user_id <= 0) return false;
 
-    $stmt = $conn->prepare("SELECT 1 FROM users WHERE id = ? LIMIT 1");
+    $stmt = stats_prepare("SELECT 1 FROM users WHERE id = ? LIMIT 1");
+    if (!$stmt) return false;
     $stmt->bind_param('i', $user_id);
     $stmt->execute();
     $stmt->store_result();
@@ -81,10 +106,12 @@ function stats_add_xp(
         return false;
     }
 
-    $stmt = $conn->prepare(
+    $stmt = stats_prepare(
         "INSERT INTO xp_log (user_id, game_code, event_type, xp_delta, related_result_id, season_id)
          VALUES (?, ?, ?, ?, ?, ?)"
     );
+
+    if (!$stmt) return false;
 
     // bind: i s s i i i
     $rid = $related_result_id ?? null;
@@ -99,7 +126,7 @@ function stats_add_xp(
         stats_check_level_achievements($user_id);
     }
 
-    return (bool)$ok;
+    return $ok;
 }
 
 // ------------------------------------------------
@@ -111,9 +138,12 @@ function stats_award_achievement(int $user_id, string $code): bool {
     if ($user_id <= 0 || $code === '') return false;
 
     // już posiada?
-    $stmt = $conn->prepare(
+    $stmt = stats_prepare(
         "SELECT 1 FROM user_achievements WHERE user_id = ? AND achievement_code = ? LIMIT 1"
     );
+
+    if (!$stmt) return false;
+
     $stmt->bind_param('is', $user_id, $code);
     $stmt->execute();
     $stmt->store_result();
@@ -123,9 +153,12 @@ function stats_award_achievement(int $user_id, string $code): bool {
     if ($already) return false;
 
     // czy istnieje taka odznaka
-    $stmt = $conn->prepare(
+    $stmt = stats_prepare(
         "SELECT xp_reward FROM achievements WHERE code = ? LIMIT 1"
     );
+
+    if (!$stmt) return false;
+
     $stmt->bind_param('s', $code);
     $stmt->execute();
     $res = $stmt->get_result();
@@ -135,9 +168,12 @@ function stats_award_achievement(int $user_id, string $code): bool {
     if (!$row) return false;
 
     // zapisz zdobycie
-    $stmt = $conn->prepare(
+    $stmt = stats_prepare(
         "INSERT INTO user_achievements (user_id, achievement_code) VALUES (?, ?)"
     );
+
+    if (!$stmt) return false;
+
     $stmt->bind_param('is', $user_id, $code);
     $ok = $stmt->execute();
     $stmt->close();
@@ -161,7 +197,7 @@ function stats_apply_first_game_of_day_bonus(int $user_id, ?int $season_id = nul
 
     [$startUtc, $endUtc] = warsaw_day_bounds_utc();
 
-    $stmt = $conn->prepare(
+    $stmt = stats_prepare(
         "SELECT 1
          FROM xp_log
          WHERE user_id = ?
@@ -170,6 +206,9 @@ function stats_apply_first_game_of_day_bonus(int $user_id, ?int $season_id = nul
            AND created_at >= ? AND created_at < ?
          LIMIT 1"
     );
+
+    if (!$stmt) return;
+
     $stmt->bind_param('iss', $user_id, $startUtc, $endUtc);
     $stmt->execute();
     $stmt->store_result();
@@ -188,7 +227,7 @@ function stats_apply_win_streak_bonus(int $user_id, ?int $season_id = null): voi
     global $conn;
 
     // pobierz ostatnie wyniki (wystarczy 20)
-    $stmt = $conn->prepare(
+    $stmt = stats_prepare(
         "SELECT result
          FROM game_results
          WHERE user_id = ?
@@ -196,6 +235,9 @@ function stats_apply_win_streak_bonus(int $user_id, ?int $season_id = null): voi
          ORDER BY created_at DESC, id DESC
          LIMIT 20"
     );
+
+    if (!$stmt) return;
+
     $stmt->bind_param('i', $user_id);
     $stmt->execute();
     $res = $stmt->get_result();
@@ -231,7 +273,8 @@ function stats_check_global_achievements(int $user_id): void {
     global $conn;
 
     // 1) First game
-    $stmt = $conn->prepare("SELECT COUNT(*) AS c FROM game_results WHERE user_id = ?");
+    $stmt = stats_prepare("SELECT COUNT(*) AS c FROM game_results WHERE user_id = ?");
+    if (!$stmt) return;
     $stmt->bind_param('i', $user_id);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
@@ -249,7 +292,8 @@ function stats_check_global_achievements(int $user_id): void {
     }
 
     // 2) First win
-    $stmt = $conn->prepare("SELECT 1 FROM game_results WHERE user_id = ? AND result = 'win' LIMIT 1");
+    $stmt = stats_prepare("SELECT 1 FROM game_results WHERE user_id = ? AND result = 'win' LIMIT 1");
+    if (!$stmt) return;
     $stmt->bind_param('i', $user_id);
     $stmt->execute();
     $stmt->store_result();
@@ -260,24 +304,28 @@ function stats_check_global_achievements(int $user_id): void {
         stats_award_achievement($user_id, 'first_win');
     }
 
-    // 3) All-rounder
-    $stmt = $conn->prepare("SELECT COUNT(DISTINCT game_code) AS c FROM game_results WHERE user_id = ?");
+    // 3) All-rounder (różne gry)
+    $stmt = stats_prepare("SELECT COUNT(DISTINCT game_code) AS c FROM game_results WHERE user_id = ?");
+    if (!$stmt) return;
     $stmt->bind_param('i', $user_id);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
     $stmt->close();
 
-    $distinctGames = (int)($row['c'] ?? 0);
-    if ($distinctGames >= 3) {
+    $gamesDistinct = (int)($row['c'] ?? 0);
+    if ($gamesDistinct >= 3) {
         stats_award_achievement($user_id, 'all_rounder_3');
     }
-    if ($distinctGames >= 6) {
+    if ($gamesDistinct >= 6) {
         stats_award_achievement($user_id, 'all_rounder_6');
     }
+
+    // 4) Odznaki poziomowe – tu tylko kontrolnie
+    stats_check_level_achievements($user_id);
 }
 
 // ------------------------------------------------
-//  Odznaki za poziomy (bez dodatkowego XP - xp_reward=0)
+//  Odznaki poziomowe (na bazie sumy XP)
 // ------------------------------------------------
 function stats_check_level_achievements(int $user_id): void {
     global $conn;
@@ -285,7 +333,8 @@ function stats_check_level_achievements(int $user_id): void {
     if ($user_id <= 0) return;
 
     // Total XP
-    $stmt = $conn->prepare("SELECT COALESCE(SUM(xp_delta), 0) AS total_xp FROM xp_log WHERE user_id = ?");
+    $stmt = stats_prepare("SELECT COALESCE(SUM(xp_delta), 0) AS total_xp FROM xp_log WHERE user_id = ?");
+    if (!$stmt) return;
     $stmt->bind_param('i', $user_id);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
@@ -294,7 +343,8 @@ function stats_check_level_achievements(int $user_id): void {
     $xp = (int)($row['total_xp'] ?? 0);
 
     // Current level from user_levels
-    $stmt = $conn->prepare("SELECT COALESCE(MAX(level), 1) AS lvl FROM user_levels WHERE xp_required <= ?");
+    $stmt = stats_prepare("SELECT COALESCE(MAX(level), 1) AS lvl FROM user_levels WHERE xp_required <= ?");
+    if (!$stmt) return;
     $stmt->bind_param('i', $xp);
     $stmt->execute();
     $row2 = $stmt->get_result()->fetch_assoc();
@@ -311,25 +361,25 @@ function stats_check_level_achievements(int $user_id): void {
 // ------------------------------------------------
 //  REJESTRACJA WYNIKU GRY
 // ------------------------------------------------
-function stats_register_result($user_id, $game_code, $result, $points = 0) {
+function stats_register_result(int $user_id, string $game_code, string $result, int $points = 0): bool {
     global $conn;
 
-    $user_id = (int)$user_id;
-    $game_code = (string)$game_code;
-    $result = (string)$result;
-
-    if ($user_id <= 0 || $game_code === '' || $result === '') return false;
-
-    // tylko realne konta (bez guest_id)
+    if ($user_id <= 0) return false;
     if (!stats_user_exists($user_id)) return false;
+
+    $allowed = ['win','loss','draw'];
+    if (!in_array($result, $allowed, true)) return false;
 
     $season_id = get_active_season($conn);
 
-    // 1) Zapisz wynik
-    $stmt = $conn->prepare(
+    // 1) zapis do game_results
+    $stmt = stats_prepare(
         "INSERT INTO game_results (user_id, game_code, result, points, season_id)
          VALUES (?, ?, ?, ?, ?)"
     );
+
+    if (!$stmt) return false;
+
     $stmt->bind_param('issii', $user_id, $game_code, $result, $points, $season_id);
     $ok = $stmt->execute();
     $result_id = $stmt->insert_id;
@@ -378,33 +428,27 @@ function get_user_xp($user_id) {
     $xp = intval($row['total_xp'] ?? 0);
 
     // Poziom na podstawie user_levels
-    $level_sql = "SELECT MAX(level) AS lvl FROM user_levels WHERE xp_required <= $xp";
-    $res2 = mysqli_query($conn, $level_sql);
+    $sql2 = "SELECT COALESCE(MAX(level), 1) AS lvl FROM user_levels WHERE xp_required <= $xp";
+    $res2 = mysqli_query($conn, $sql2);
     $row2 = $res2 ? mysqli_fetch_assoc($res2) : null;
+    $lvl = intval($row2['lvl'] ?? 1);
 
-    $level = intval($row2['lvl'] ?? 1);
-
-    return [
-        'xp' => $xp,
-        'level' => $level
-    ];
+    return [$xp, $lvl];
 }
 
 // ------------------------------------------------
-//  Globalne statystyki użytkownika
+//  STATYSTYKI per user (global)
 // ------------------------------------------------
 function get_user_stats_global($user_id) {
     global $conn;
-
     $user_id = (int)$user_id;
 
     $sql = "
-        SELECT 
+        SELECT
             COUNT(*) AS games_total,
-            SUM(result='win')  AS wins,
+            SUM(result='win') AS wins,
             SUM(result='loss') AS losses,
-            SUM(result='draw') AS draws,
-            MAX(created_at)    AS last_game
+            SUM(result='draw') AS draws
         FROM game_results
         WHERE user_id = $user_id
     ";
@@ -412,60 +456,41 @@ function get_user_stats_global($user_id) {
     $res = mysqli_query($conn, $sql);
     $row = $res ? mysqli_fetch_assoc($res) : null;
 
-    $games = intval($row['games_total'] ?? 0);
-    $wins  = intval($row['wins'] ?? 0);
-    $loss  = intval($row['losses'] ?? 0);
-    $draws = intval($row['draws'] ?? 0);
-
-    $win_rate = $games > 0 ? round(($wins / $games) * 100, 1) : 0;
-
     return [
-        'games_total' => $games,
-        'wins' => $wins,
-        'losses' => $loss,
-        'draws' => $draws,
-        'win_rate' => $win_rate,
-        'last_game' => $row['last_game'] ?? null
+        'games_total' => (int)($row['games_total'] ?? 0),
+        'wins'        => (int)($row['wins'] ?? 0),
+        'losses'      => (int)($row['losses'] ?? 0),
+        'draws'       => (int)($row['draws'] ?? 0),
     ];
 }
 
 // ------------------------------------------------
-//  Statystyki per gra
+//  STATYSTYKI per user (per game_code)
 // ------------------------------------------------
-function get_user_stats_per_game($user_id) {
+function get_user_stats_per_game($user_id, $game_code) {
     global $conn;
-
     $user_id = (int)$user_id;
+    $game_code_safe = mysqli_real_escape_string($conn, $game_code);
 
     $sql = "
-        SELECT 
-            game_code,
+        SELECT
             COUNT(*) AS games_total,
             SUM(result='win') AS wins,
             SUM(result='loss') AS losses,
-            SUM(result='draw') AS draws,
-            SUM(points) AS total_points
+            SUM(result='draw') AS draws
         FROM game_results
-        WHERE user_id = $user_id
-        GROUP BY game_code
-        ORDER BY games_total DESC
+        WHERE user_id = $user_id AND game_code = '$game_code_safe'
     ";
 
     $res = mysqli_query($conn, $sql);
-    $rows = [];
+    $row = $res ? mysqli_fetch_assoc($res) : null;
 
-    if ($res) {
-        while ($r = mysqli_fetch_assoc($res)) {
-            $games = intval($r['games_total']);
-            $wins  = intval($r['wins']);
-            $win_rate = $games > 0 ? round(($wins / $games) * 100, 1) : 0;
-
-            $r['win_rate'] = $win_rate;
-            $rows[] = $r;
-        }
-    }
-
-    return $rows;
+    return [
+        'games_total' => (int)($row['games_total'] ?? 0),
+        'wins'        => (int)($row['wins'] ?? 0),
+        'losses'      => (int)($row['losses'] ?? 0),
+        'draws'       => (int)($row['draws'] ?? 0),
+    ];
 }
 
 // ------------------------------------------------
@@ -490,7 +515,7 @@ function get_ranking_alltime() {
 }
 
 // ------------------------------------------------
-//  Ranking miesięczny
+//  Ranking miesięczny (po XP)
 // ------------------------------------------------
 function get_ranking_monthly() {
     global $conn;
@@ -514,7 +539,7 @@ function get_ranking_monthly() {
 }
 
 // ------------------------------------------------
-//  Ranking dzienny
+//  Ranking dzienny (po XP)
 // ------------------------------------------------
 function get_ranking_daily() {
     global $conn;
@@ -537,13 +562,13 @@ function get_ranking_daily() {
 }
 
 // ------------------------------------------------
-//  Ranking sezonowy
+//  Ranking aktywnego sezonu (po XP)
 // ------------------------------------------------
-function get_ranking_season($season_id) {
+function get_ranking_season() {
     global $conn;
 
-    $season_id = (int)$season_id;
-    if ($season_id <= 0) return [];
+    $season_id = get_active_season($conn);
+    if (!$season_id) return [];
 
     $sql = "
         SELECT 
@@ -561,5 +586,3 @@ function get_ranking_season($season_id) {
     $res = mysqli_query($conn, $sql);
     return $res ? mysqli_fetch_all($res, MYSQLI_ASSOC) : [];
 }
-
-?>
