@@ -110,6 +110,11 @@ require_once __DIR__ . '/../../includes/auth.php';
         <h2>🤖 Gra z botem — Trudny</h2>
         <p>Bot gra najlepiej jak potrafi.</p>
     </a>
+    <!-- Gra z botem: ekspert -->
+    <a href="create_game.php?mode=bot&bot_difficulty=4" class="menu-card">
+        <h2>🤖 Gra z botem — Ekspert</h2>
+        <p>Najmocniejszy bot (lookahead + lepsze wykorzystanie odbić).</p>
+    </a>
 
     <a href="pvp.php" class="menu-card">
     <h2>👥 Gra PvP — Zagraj z innym graczem</h2>

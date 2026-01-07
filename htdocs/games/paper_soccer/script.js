@@ -30,26 +30,17 @@ if (canvas) {
 }
 
 // bramki – logiczne (zgodne z backendem)
-const goalTop = {
-    y: 0,
-    xStart: 3,
-    xEnd: 5
-};
-
-const goalBottom = {
-    y: 12,
-    xStart: 3,
-    xEnd: 5
-};
+const goalTop = { y: 0,  xStart: 3, xEnd: 5 };
+const goalBottom = { y: 12, xStart: 3, xEnd: 5 };
 
 // stan gry po stronie frontu
 let ball      = { x: 4, y: 6 }; // środek planszy
 let usedLines = [];
 
-// dane z atrybutów canvas
+// dane z atrybutów canvas (ZGODNE z play.php)
 let ajaxGameID  = canvas ? parseInt(canvas.dataset.gameId, 10) : null;
 let ajaxPlayer  = canvas ? parseInt(canvas.dataset.player, 10) : null;
-let gameMode    = canvas ? canvas.dataset.mode : null;
+let gameMode    = canvas ? (canvas.dataset.mode || null) : null;
 let botDiff     = canvas ? parseInt(canvas.dataset.botDiff || "1", 10) : 1;
 
 let movesLoaded   = 0;
@@ -104,11 +95,7 @@ function drawStands() {
 
     const stripeWidth = 16;
     for (let x = sx; x < sx + sw; x += stripeWidth) {
-        if (((x / stripeWidth) | 0) % 2 === 0) {
-            ctx.fillStyle = "#262d3b";
-        } else {
-            ctx.fillStyle = "#161b26";
-        }
+        ctx.fillStyle = ((((x / stripeWidth) | 0) % 2) === 0) ? "#262d3b" : "#161b26";
         ctx.fillRect(x, sy, stripeWidth, sh);
     }
 
@@ -151,9 +138,9 @@ function drawPitch() {
     // linia zewnętrzna
     ctx.rect(gx + 6, gy + 6, bw - 12, bh - 12);
 
-    // linia środkowa
-    ctx.moveTo(gx + bw / 2, gy + 6);
-    ctx.lineTo(gx + bw / 2, gy + bh - 6);
+    // LINIA ŚRODKOWA (POPRAWKA: w poprzek boiska)
+    ctx.moveTo(gx + 6,      gy + bh / 2);
+    ctx.lineTo(gx + bw - 6, gy + bh / 2);
 
     // koło środkowe
     const center = gridToPx(4, 6);
@@ -161,14 +148,13 @@ function drawPitch() {
     ctx.moveTo(center.x + circleR, center.y);
     ctx.arc(center.x, center.y, circleR, 0, Math.PI * 2);
 
-    // pola karne – górne
+    // pola karne – górne/dolne
     const penaltyDepth   = cellSize * 3.2;
     const boxWidth       = bw * 0.6;
     const boxX           = gx + (bw - boxWidth) / 2;
     const topBoxY        = gy + 6;
     const bottomBoxY     = gy + bh - 6 - penaltyDepth;
 
-    // prostokąty pól karnych
     ctx.rect(boxX, topBoxY, boxWidth, penaltyDepth);
     ctx.rect(boxX, bottomBoxY, boxWidth, penaltyDepth);
 
@@ -194,7 +180,7 @@ function drawPitch() {
 
     ctx.stroke();
 
-    // bramki – czerwone pola na liniach końcowych (nad i pod siatką punktów)
+    // bramki – czerwone pola na liniach końcowych
     ctx.strokeStyle = "#ff5555";
     ctx.lineWidth   = 6;
     ctx.beginPath();
@@ -240,7 +226,7 @@ function drawLine(x1, y1, x2, y2) {
     ctx.stroke();
 }
 
-// piłka – cartoon (gruby kontur, łatwo widoczna)
+// piłka – cartoon
 function drawBallAtPixel(px, py) {
     const r = cellSize * 0.33;
 
@@ -258,11 +244,12 @@ function drawBallAtPixel(px, py) {
     ctx.arc(px, py, r, 0, Math.PI * 2);
     ctx.fillStyle = "#fdfdfd";
     ctx.fill();
+
     ctx.lineWidth = 3;
     ctx.strokeStyle = "#222222";
     ctx.stroke();
 
-    // kilka „łat” – komiksowo, bez dokładnej geometrii
+    // „łaty”
     ctx.lineWidth = 2;
     ctx.strokeStyle = "#555555";
 
@@ -316,7 +303,7 @@ function drawBoard() {
         drawLine(line.x1, line.y1, line.x2, line.y2);
     }
 
-    // piłka (jeśli nie trwa animacja, rysujemy w obecnej pozycji)
+    // piłka (jeśli nie trwa animacja)
     if (!animating) {
         drawBall(ball.x, ball.y);
     }
@@ -338,19 +325,15 @@ function addLine(x1, y1, x2, y2) {
 
 // walidacja ruchu – z zakazem jazdy wzdłuż ściany
 function isValidMove(x, y) {
-    // poza planszą
     if (x < 0 || x >= cols || y < 0 || y >= rows) return false;
 
     const dx = Math.abs(x - ball.x);
     const dy = Math.abs(y - ball.y);
 
-    // musi być sąsiednie pole i nie to samo
     if (dx > 1 || dy > 1 || (dx === 0 && dy === 0)) return false;
 
-    // linia już była?
     if (isLineUsed(ball.x, ball.y, x, y)) return false;
 
-    // zakaz ślizgania się po ścianie
     const onLeftWallSlide   = (ball.x === 0        && x === 0        && ball.y !== y);
     const onRightWallSlide  = (ball.x === cols - 1 && x === cols - 1 && ball.y !== y);
     const onTopWallSlide    = (ball.y === 0        && y === 0        && ball.x !== x);
@@ -365,28 +348,20 @@ function isValidMove(x, y) {
 
 // odbicie
 function hasBounce(x, y) {
-    // 1) ŚCIANY
     if (x === 0 || x === cols - 1) return true;
     if (y === 0 || y === rows - 1) return true;
 
-    // 2) SKRZYŻOWANIA – jeśli z punktu (x,y) wychodzi >= 2 odcinki
     let degree = 0;
     for (let line of usedLines) {
-        if (
-            (line.x1 === x && line.y1 === y) ||
-            (line.x2 === x && line.y2 === y)
-        ) {
+        if ((line.x1 === x && line.y1 === y) || (line.x2 === x && line.y2 === y)) {
             degree++;
-            if (degree >= 2) {
-                return true;
-            }
+            if (degree >= 2) return true;
         }
     }
-
     return false;
 }
 
-// dowolna bramka (numer nie jest używany, tylko boolean)
+// bramka
 function isGoal(x, y) {
     if (y === goalBottom.y && x >= goalBottom.xStart && x <= goalBottom.xEnd) return 1;
     if (y === goalTop.y    && x >= goalTop.xStart    && x <= goalTop.xEnd)    return 2;
@@ -406,7 +381,7 @@ function startBallAnimation(fromX, fromY, toX, toY) {
         if (!animating) return;
 
         const t = Math.min(1, (now - animStartTime) / animDuration);
-        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // lekka krzywa
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 
         const x = animFrom.x + (animTo.x - animFrom.x) * ease;
         const y = animFrom.y + (animTo.y - animFrom.y) * ease;
@@ -414,9 +389,8 @@ function startBallAnimation(fromX, fromY, toX, toY) {
         drawBoard();
         drawBallAtPixel(x, y);
 
-        if (t < 1) {
-            requestAnimationFrame(step);
-        } else {
+        if (t < 1) requestAnimationFrame(step);
+        else {
             animating = false;
             drawBoard();
         }
@@ -433,7 +407,6 @@ function makeMove(x, y) {
 
     const prev = { x: ball.x, y: ball.y };
 
-    // GOL?
     const goal = isGoal(x, y);
     if (goal) {
         addLine(ball.x, ball.y, x, y);
@@ -444,7 +417,6 @@ function makeMove(x, y) {
         return;
     }
 
-    // NORMALNY RUCH
     addLine(ball.x, ball.y, x, y);
     ball.x = x;
     ball.y = y;
@@ -465,7 +437,6 @@ if (canvas && ctx) {
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
 
-        // konwersja z pikseli na siatkę
         const x = Math.round((mx - boardOffsetX) / cellSize);
         const y = Math.round((my - boardOffsetY) / cellSize);
 
@@ -499,30 +470,18 @@ function sendMove(fromX, fromY, toX, toY, extra, goal, draw) {
             console.log("move.php RAW RESPONSE:", raw);
 
             if (!r.ok) {
-                alert(
-                    "Serwer zwrócił błąd HTTP " +
-                    r.status +
-                    ". Odpowiedź:\n\n" +
-                    raw.slice(0, 400)
-                );
+                alert("Serwer zwrócił błąd HTTP " + r.status + ". Odpowiedź:\n\n" + raw.slice(0, 400));
                 throw new Error("HTTP " + r.status);
             }
 
             let resp;
-            try {
-                resp = JSON.parse(raw);
-            } catch (e) {
-                alert(
-                    "Serwer zwrócił niepoprawny JSON.\n" +
-                    "Początek odpowiedzi:\n\n" +
-                    raw.slice(0, 400)
-                );
+            try { resp = JSON.parse(raw); }
+            catch (e) {
+                alert("Serwer zwrócił niepoprawny JSON.\nPoczątek:\n\n" + raw.slice(0, 400));
                 throw e;
             }
 
-            if (resp && resp.error) {
-                alert("Błąd z move.php: " + resp.error);
-            }
+            if (resp && resp.error) alert("Błąd z move.php: " + resp.error);
 
             syncGame();
         })
@@ -530,9 +489,7 @@ function sendMove(fromX, fromY, toX, toY, extra, goal, draw) {
             console.error("Błąd podczas wysyłania ruchu move.php:", err);
             alert("Wystąpił błąd po stronie serwera przy wysyłaniu ruchu.");
         })
-        .finally(() => {
-            isSendingMove = false;
-        });
+        .finally(() => { isSendingMove = false; });
 }
 
 // ----------------------------------------------------
@@ -541,18 +498,40 @@ function sendMove(fromX, fromY, toX, toY, extra, goal, draw) {
 function syncGame() {
     if (!ajaxGameID || !canvas || !ctx) return;
 
+    const infoTurn = document.getElementById("ps-turn-info");
+
     fetch("state.php?game_id=" + encodeURIComponent(ajaxGameID))
-        .then(r => r.json())
+        .then(async (r) => {
+            const raw = await r.text();
+
+            if (!r.ok) {
+                if (infoTurn) infoTurn.textContent = "Błąd state.php: HTTP " + r.status;
+                console.error("state.php HTTP error", r.status, raw.slice(0, 400));
+                throw new Error("HTTP " + r.status);
+            }
+
+            try {
+                return JSON.parse(raw);
+            } catch (e) {
+                if (infoTurn) infoTurn.textContent = "Błąd state.php: niepoprawny JSON";
+                console.error("state.php JSON parse error", raw.slice(0, 400));
+                throw e;
+            }
+        })
         .then(state => {
-            const infoTurn    = document.getElementById("ps-turn-info");
-            const p1NameEl    = document.getElementById("ps-p1-name");
-            const p2NameEl    = document.getElementById("ps-p2-name");
-            const p1GoalEl    = document.getElementById("ps-p1-goal");
-            const p2GoalEl    = document.getElementById("ps-p2-goal");
-            const scoreEl     = document.getElementById("ps-score");
+            const p1NameEl = document.getElementById("ps-p1-name");
+            const p2NameEl = document.getElementById("ps-p2-name");
+            const p1GoalEl = document.getElementById("ps-p1-goal");
+            const p2GoalEl = document.getElementById("ps-p2-goal");
+            const scoreEl  = document.getElementById("ps-score");
 
             if (!state || !state.game) {
-                if (infoTurn) infoTurn.innerHTML = "Błąd stanu gry.";
+                if (infoTurn) infoTurn.textContent = "Błąd stanu gry.";
+                return;
+            }
+
+            if (state.error) {
+                if (infoTurn) infoTurn.textContent = "Błąd: " + state.error;
                 return;
             }
 
@@ -562,11 +541,16 @@ function syncGame() {
             if (p1NameEl) p1NameEl.textContent = p1Name;
             if (p2NameEl) p2NameEl.textContent = p2Name;
 
-            // opis bramek – P1 dół, P2 góra
-            if (p1GoalEl) p1GoalEl.textContent = "Atakujesz bramkę na dole";
-            if (p2GoalEl) p2GoalEl.textContent = "Atakujesz bramkę u góry";
+            // POPRAWKA: opisy bramek zależne od tego, kim jesteś
+            if (ajaxPlayer === 1) {
+                if (p1GoalEl) p1GoalEl.textContent = "Atakujesz bramkę na dole";
+                if (p2GoalEl) p2GoalEl.textContent = "Przeciwnik atakuje bramkę u góry";
+            } else if (ajaxPlayer === 2) {
+                if (p1GoalEl) p1GoalEl.textContent = "Przeciwnik atakuje bramkę na dole";
+                if (p2GoalEl) p2GoalEl.textContent = "Atakujesz bramkę u góry";
+            }
 
-            // ładowanie wyniku z localStorage (tylko raz)
+            // localStorage wynik (tylko raz)
             if (!scoresLoaded) {
                 scoreKey = "ps_score_" + p1Name + "_" + p2Name;
                 try {
@@ -585,7 +569,7 @@ function syncGame() {
 
             // OCZEKIWANIE
             if (state.game.status === "waiting") {
-                if (infoTurn) infoTurn.innerHTML = "Oczekiwanie na drugiego gracza...";
+                if (infoTurn) infoTurn.textContent = "Oczekiwanie na drugiego gracza...";
                 canvas.style.pointerEvents = "none";
                 return;
             }
@@ -593,23 +577,18 @@ function syncGame() {
             // KONIEC GRY
             if (state.game.status === "finished") {
 
-                // dorysuj wszystkie ruchy
                 if (Array.isArray(state.moves) && state.moves.length !== movesLoaded) {
                     reloadMoves(state.moves);
                     movesLoaded = state.moves.length;
                 }
 
-                // ustalenie przyczyny
                 let reason = "nomove";
-
-                if (state.game.winner == 0) {
-                    reason = "draw";
-                }
+                if (state.game.winner == 0) reason = "draw";
 
                 if (Array.isArray(state.moves) && state.moves.length > 0) {
                     const last = state.moves[state.moves.length - 1];
-                    const lx = last.to_x;
-                    const ly = last.to_y;
+                    const lx = Number(last.to_x);
+                    const ly = Number(last.to_y);
 
                     if (
                         (ly === goalTop.y    && lx >= goalTop.xStart    && lx <= goalTop.xEnd) ||
@@ -620,9 +599,8 @@ function syncGame() {
                 }
 
                 const winner = parseInt(state.game.winner, 10);
-                const me     = ajaxPlayer;
+                const me = ajaxPlayer;
 
-                // aktualizacja wyniku (tylko raz dla danej gry)
                 if (!scoreCountedForGame) {
                     if (winner === 1) scoreP1++;
                     else if (winner === 2) scoreP2++;
@@ -631,10 +609,7 @@ function syncGame() {
 
                     if (scoreKey) {
                         try {
-                            localStorage.setItem(
-                                scoreKey,
-                                JSON.stringify({ p1: scoreP1, p2: scoreP2 })
-                            );
+                            localStorage.setItem(scoreKey, JSON.stringify({ p1: scoreP1, p2: scoreP2 }));
                         } catch (e) {
                             console.warn("Nie udało się zapisać wyniku do localStorage:", e);
                         }
@@ -648,17 +623,13 @@ function syncGame() {
                     if (winner === 0 || reason === "draw") {
                         msg = "🤝 Gra zakończona remisem.";
                     } else if (winner === me) {
-                        if (reason === "goal") {
-                            msg = "🏆 Gratulacje, wygrałeś! Strzeliłeś gola!";
-                        } else {
-                            msg = "🏆 Gratulacje, wygrałeś! Przeciwnik nie ma ruchu!";
-                        }
+                        msg = (reason === "goal")
+                            ? "🏆 Gratulacje, wygrałeś! Strzeliłeś gola!"
+                            : "🏆 Gratulacje, wygrałeś! Przeciwnik nie ma ruchu!";
                     } else {
-                        if (reason === "goal") {
-                            msg = "❌ Niestety, przegrałeś! Straciłeś gola!";
-                        } else {
-                            msg = "❌ Niestety, przegrałeś! Nie masz ruchu!";
-                        }
+                        msg = (reason === "goal")
+                            ? "❌ Niestety, przegrałeś! Straciłeś gola!"
+                            : "❌ Niestety, przegrałeś! Nie masz ruchu!";
                     }
 
                     infoTurn.innerHTML = msg;
@@ -700,9 +671,10 @@ function reloadMoves(moves) {
     ball = { x: 4, y: 6 };
 
     for (let mv of moves) {
-        addLine(mv.from_x, mv.from_y, mv.to_x, mv.to_y);
-        ball.x = mv.to_x;
-        ball.y = mv.to_y;
+        // POPRAWKA: rzutowanie na Number() – dokładnie o to chodziło
+        addLine(Number(mv.from_x), Number(mv.from_y), Number(mv.to_x), Number(mv.to_y));
+        ball.x = Number(mv.to_x);
+        ball.y = Number(mv.to_y);
     }
     drawBoard();
 }
@@ -721,7 +693,6 @@ if (rematchBtn && canvas) {
             window.location.href =
                 "create_game.php?mode=bot&bot_difficulty=" + encodeURIComponent(botDiff);
         } else {
-            // w PvP wracamy do ekranu, gdzie można znów stworzyć grę lub dołączyć
             window.location.href = "pvp.php";
         }
     });
