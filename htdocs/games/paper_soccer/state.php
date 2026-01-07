@@ -30,47 +30,31 @@ if (!$game) {
 // -----------------------------
 // NAZWY GRACZY
 // -----------------------------
-function username_from_id($id) {
+
+function username_from_id($uid) {
     global $conn;
-    $id = (int)$id;
-    if ($id <= 0) return null;
+    $uid = (int)$uid;
+    if ($uid <= 0) return null;
     $st = $conn->prepare("SELECT username FROM users WHERE id=? LIMIT 1");
     if (!$st) return null;
-    $st->bind_param("i", $id);
+    $st->bind_param("i", $uid);
     $st->execute();
     $row = $st->get_result()->fetch_assoc();
     $st->close();
     return $row['username'] ?? null;
 }
 
-$player1_name = $game["player1_name"] ?? null;
-$player2_name = $game["player2_name"] ?? null;
-
+$player1_name = $game["player1_name"];
 if (!$player1_name) $player1_name = username_from_id($game["player1_id"]);
-if (!$player2_name) $player2_name = username_from_id($game["player2_id"]);
-
 if (!$player1_name) $player1_name = "Gość";
+
+$player2_name = $game["player2_name"];
+if (!$player2_name) $player2_name = username_from_id($game["player2_id"]);
 if (!$player2_name) $player2_name = "Gość";
 
 // w trybie bot zawsze pokazujemy BOT jako gracza 2
 if (($game['mode'] ?? '') === 'bot') {
     $player2_name = 'BOT';
-}
-
-// -----------------------------
-// POBRANIE RUCHÓW GRY
-// -----------------------------
-$moves = [];
-$stmt = $conn->prepare("SELECT * FROM paper_soccer_moves WHERE game_id=? ORDER BY move_no ASC, id ASC");
-$stmt->bind_param("i", $game_id);
-$stmt->execute();
-$res = $stmt->get_result();
-
-while ($row = $res->fetch_assoc()) {
-    foreach (["id","game_id","move_no","player","from_x","from_y","to_x","to_y"] as $k) {
-        if (isset($row[$k])) $row[$k] = (int)$row[$k];
-    }
-    $moves[] = $row;
 }
 
 // -----------------------------
@@ -94,9 +78,8 @@ echo json_encode([
         "ball_x" => (int)$game["ball_x"],
         "ball_y" => (int)$game["ball_y"],
         "used_lines" => $usedLines,
-        "moves" => $moves,
-        "player1_name" => $player1_name,
-        "player2_name" => $player2_name,
+        "player1_name"   => $player1_name,
+        "player2_name"   => $player2_name,
         "bot_difficulty" => isset($game["bot_difficulty"]) ? (int)$game["bot_difficulty"] : null
     ]
 ]);
