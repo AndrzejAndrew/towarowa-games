@@ -1,390 +1,699 @@
-(() => {
-  const canvas = document.getElementById("ps-board");
-  if (!canvas) return;
+// ----------------------------------------------------
+// KONFIGURACJA PLANSZY
+// ----------------------------------------------------
 
-  const ctx = canvas.getContext("2d");
+const cellSize    = 40;
+const pointRadius = 3;
+const cols        = 9;   // 0..8
+const rows        = 13;  // 0..12
 
-  const gameId = Number(canvas.dataset.gameId || 0);
-  const myPlayer = Number(canvas.dataset.player || 0);
-  const mode = String(canvas.dataset.mode || "pvp");
-  const botDiff = Number(canvas.dataset.botDiff || 1);
+// wymiary boiska w pikselach (siatka 0..8, 0..12 to 8 i 12 odcinków)
+const boardWidth  = (cols - 1) * cellSize;
+const boardHeight = (rows - 1) * cellSize;
 
-  const cols = 9;
-  const rows = 13;
+// marginesy + trybuny
+const marginOutside = 20;   // odstęp od krawędzi canvas do trybun
+const standWidth    = 40;   // szerokość trybun z każdej strony
 
-  // UI
-  const infoTurn = document.getElementById("ps-info-turn");
-  const p1NameEl = document.getElementById("ps-player1-name");
-  const p2NameEl = document.getElementById("ps-player2-name");
-  const scoreEl  = document.getElementById("ps-score");
-  const statusEl = document.getElementById("ps-status");
+// pozycja boiska (lewygórny róg)
+const boardOffsetX = marginOutside + standWidth;
+const boardOffsetY = marginOutside + standWidth;
 
-  // State
-  let usedLines = [];
-  let ball = { x: 4, y: 6 };
-  let currentPlayer = 1;
-  let status = "loading";
-  let winner = 0;
+// potrzebny canvas
+const canvas = document.getElementById("ps-board");
+let   ctx    = null;
 
-  let selected = null;
-  let syncing = false;
+if (canvas) {
+    canvas.width  = boardWidth  + (marginOutside + standWidth) * 2;
+    canvas.height = boardHeight + (marginOutside + standWidth) * 2;
+    ctx = canvas.getContext("2d");
+}
 
-  function normalizeLines(lines) {
-    if (!Array.isArray(lines)) return [];
-    return lines.map(l => ({
-      x1: Number(l.x1 ?? l.from_x ?? l.fromX ?? l.fx ?? l[0] ?? 0),
-      y1: Number(l.y1 ?? l.from_y ?? l.fromY ?? l.fy ?? l[1] ?? 0),
-      x2: Number(l.x2 ?? l.to_x   ?? l.toX   ?? l.tx ?? l[2] ?? 0),
-      y2: Number(l.y2 ?? l.to_y   ?? l.toY   ?? l.ty ?? l[3] ?? 0),
-    }));
-  }
+// bramki – logiczne (zgodne z backendem)
+const goalTop = { y: 0,  xStart: 3, xEnd: 5 };
+const goalBottom = { y: 12, xStart: 3, xEnd: 5 };
 
-  function lineKey(x1, y1, x2, y2) {
-    // canonical (bez kierunku)
-    if (x1 < x2 || (x1 === x2 && y1 <= y2)) return `${x1},${y1}-${x2},${y2}`;
-    return `${x2},${y2}-${x1},${y1}`;
-  }
+// stan gry po stronie frontu
+let ball      = { x: 4, y: 6 }; // środek planszy
+let usedLines = [];
 
-  function isLineUsed(x1, y1, x2, y2) {
-    const k = lineKey(x1, y1, x2, y2);
-    for (const l of usedLines) {
-      if (lineKey(l.x1, l.y1, l.x2, l.y2) === k) return true;
-    }
-    return false;
-  }
+// dane z atrybutów canvas (ZGODNE z play.php)
+let ajaxGameID  = canvas ? parseInt(canvas.dataset.gameId, 10) : null;
+let ajaxPlayer  = canvas ? parseInt(canvas.dataset.player, 10) : null;
+let gameMode    = canvas ? (canvas.dataset.mode || null) : null;
+let botDiff     = canvas ? parseInt(canvas.dataset.botDiff || "1", 10) : 1;
 
-  // Geometria
-  function layout() {
-    const pad = 42;
-    const w = canvas.width;
-    const h = canvas.height;
-    const gx = (w - 2 * pad) / (cols - 1);
-    const gy = (h - 2 * pad) / (rows - 1);
-    return { pad, w, h, gx, gy };
-  }
+let movesLoaded   = 0;
+let isSendingMove = false;
 
-  function gridToPx(x, y) {
-    const { pad, gx, gy } = layout();
-    return { px: pad + x * gx, py: pad + y * gy };
-  }
+// Wyniki meczów (lokalnie, na podstawie winner)
+let scoreP1 = 0;
+let scoreP2 = 0;
+let scoresLoaded = false;
+let scoreKey = null;
+let scoreCountedForGame = false;
 
-  function findNearestPoint(px, py) {
-    const { pad, w, h, gx, gy } = layout();
-    if (px < pad - 20 || px > w - pad + 20 || py < pad - 20 || py > h - pad + 20) return null;
+// do animacji piłki
+let animating     = false;
+let animStartTime = 0;
+let animDuration  = 180; // ms
+let animFrom      = null;
+let animTo        = null;
 
-    // przybliżone zaokrąglenie do siatki
-    const x = Math.round((px - pad) / gx);
-    const y = Math.round((py - pad) / gy);
+// ----------------------------------------------------
+// POMOCNICZE – konwersja z siatki na piksele
+// ----------------------------------------------------
+function gridToPx(x, y) {
+    return {
+        x: boardOffsetX + x * cellSize,
+        y: boardOffsetY + y * cellSize
+    };
+}
 
-    if (x < 0 || x >= cols || y < 0 || y >= rows) return null;
+// ----------------------------------------------------
+// RYSOWANIE – STADION + BOISKO
+// ----------------------------------------------------
+function drawStands() {
+    // tło całego canvas
+    ctx.fillStyle = "#050814";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const p = gridToPx(x, y);
-    const dist = Math.hypot(p.px - px, p.py - py);
-    if (dist > 18) return null;
-    return { x, y };
-  }
+    // prostokąt trybun
+    const sx = marginOutside;
+    const sy = marginOutside;
+    const sw = canvas.width  - marginOutside * 2;
+    const sh = canvas.height - marginOutside * 2;
 
-  function hasBounce(x, y) {
-    // Odbicie od ścian
-    if (x === 0 || x === cols - 1 || y === 0 || y === rows - 1) return true;
+    ctx.fillStyle = "#1e2430";
+    ctx.fillRect(sx, sy, sw, sh);
 
-    // Skrzyżowania (>=2 linii wychodzące z punktu)
-    let deg = 0;
-    for (const l of usedLines) {
-      if ((l.x1 === x && l.y1 === y) || (l.x2 === x && l.y2 === y)) {
-        deg++;
-        if (deg >= 2) return true;
-      }
-    }
-    return false;
-  }
-
-  function isGoal(x, y) {
-    // bramki: górna y=0 i dolna y=12, środek x=3..5
-    return (x >= 3 && x <= 5) && (y === 0 || y === rows - 1);
-  }
-
-  function isValidMove(from, to) {
-    const dx = Math.abs(to.x - from.x);
-    const dy = Math.abs(to.y - from.y);
-    if (dx > 1 || dy > 1 || (dx === 0 && dy === 0)) return false;
-
-    if (to.x < 0 || to.x >= cols || to.y < 0 || to.y >= rows) return false;
-
-    if (isLineUsed(from.x, from.y, to.x, to.y)) return false;
-
-    // Zgodnie z Twoim backendem (bot.php): zakaz "ślizgania" po skrajnych liniach
-    const leftSlide   = (from.x === 0 && to.x === 0 && from.y !== to.y);
-    const rightSlide  = (from.x === cols - 1 && to.x === cols - 1 && from.y !== to.y);
-    const topSlide    = (from.y === 0 && to.y === 0 && from.x !== to.x);
-    const bottomSlide = (from.y === rows - 1 && to.y === rows - 1 && from.x !== to.x);
-    if (leftSlide || rightSlide || topSlide || bottomSlide) return false;
-
-    return true;
-  }
-
-  // Rysowanie
-  function drawPitch() {
-    const { pad, w, h, gx, gy } = layout();
-
-    ctx.clearRect(0, 0, w, h);
-
-    // tło (ciemne)
-    ctx.fillStyle = "#111";
-    ctx.fillRect(0, 0, w, h);
-
-    // murawa
-    const fx = pad;
-    const fy = pad;
-    const fw = w - 2 * pad;
-    const fh = h - 2 * pad;
-
-    ctx.fillStyle = "#1b7f3a";
-    ctx.fillRect(fx, fy, fw, fh);
-
-    // PASY W POPRZEK BOISKA (poziome pasy, zmieniają się po Y)
-    const stripeH = gy * 2; // co ~2 kratki
-    for (let y = fy; y < fy + fh; y += stripeH) {
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(fx, y, fw, stripeH * 0.5);
-    }
-
-    // linie boiska
-    ctx.strokeStyle = "rgba(255,255,255,0.95)";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(fx, fy, fw, fh);
-
-    // linia środkowa
-    const midY = fy + (rows - 1) * gy / 2;
+    // paski trybun (pionowe)
+    ctx.save();
     ctx.beginPath();
-    ctx.moveTo(fx, midY);
-    ctx.lineTo(fx + fw, midY);
-    ctx.stroke();
+    ctx.rect(sx, sy, sw, sh);
+    ctx.clip();
+
+    const stripeWidth = 16;
+    for (let x = sx; x < sx + sw; x += stripeWidth) {
+        ctx.fillStyle = ((((x / stripeWidth) | 0) % 2) === 0) ? "#262d3b" : "#161b26";
+        ctx.fillRect(x, sy, stripeWidth, sh);
+    }
+
+    ctx.restore();
+
+    // delikatna ramka stadionu
+    ctx.strokeStyle = "#3b4251";
+    ctx.lineWidth   = 2;
+    ctx.strokeRect(sx, sy, sw, sh);
+}
+
+function drawPitch() {
+    // murawa – jednolita, jasna z lekkim gradientem
+    const bw = boardWidth;
+    const bh = boardHeight;
+
+    const gx = boardOffsetX;
+    const gy = boardOffsetY;
+
+    const grad = ctx.createLinearGradient(gx, gy, gx, gy + bh);
+    grad.addColorStop(0, "#2fbf5b");
+    grad.addColorStop(1, "#24a049");
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(gx, gy, bw, bh);
+
+    // jaśniejsze pasy murawy – subtelne, poziome
+    const stripeH = cellSize * 1;
+    for (let y = 0; y < bh; y += stripeH * 2) {
+        ctx.fillStyle = "rgba(255,255,255,0.05)";
+        ctx.fillRect(gx, gy + y, bw, stripeH);
+    }
+
+    // linie boiska – białe, grube, cartoon
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth   = 3;
+    ctx.lineJoin    = "round";
+
+    ctx.beginPath();
+    // linia zewnętrzna
+    ctx.rect(gx + 6, gy + 6, bw - 12, bh - 12);
+
+    // LINIA ŚRODKOWA (POPRAWKA: w poprzek boiska)
+    ctx.moveTo(gx + 6,      gy + bh / 2);
+    ctx.lineTo(gx + bw - 6, gy + bh / 2);
 
     // koło środkowe
-    const midX = fx + (cols - 1) * gx / 2;
-    ctx.beginPath();
-    ctx.arc(midX, midY, Math.min(gx, gy) * 1.5, 0, Math.PI * 2);
+    const center = gridToPx(4, 6);
+    const circleR = cellSize * 1.3;
+    ctx.moveTo(center.x + circleR, center.y);
+    ctx.arc(center.x, center.y, circleR, 0, Math.PI * 2);
+
+    // pola karne – górne/dolne
+    const penaltyDepth   = cellSize * 3.2;
+    const boxWidth       = bw * 0.6;
+    const boxX           = gx + (bw - boxWidth) / 2;
+    const topBoxY        = gy + 6;
+    const bottomBoxY     = gy + bh - 6 - penaltyDepth;
+
+    ctx.rect(boxX, topBoxY, boxWidth, penaltyDepth);
+    ctx.rect(boxX, bottomBoxY, boxWidth, penaltyDepth);
+
+    // małe pola bramkowe
+    const smallDepth = cellSize * 1.6;
+    const smallWidth = bw * 0.35;
+    const smallX     = gx + (bw - smallWidth) / 2;
+    const topSmallY  = topBoxY;
+    const botSmallY  = gy + bh - 6 - smallDepth;
+
+    ctx.rect(smallX, topSmallY, smallWidth, smallDepth);
+    ctx.rect(smallX, botSmallY, smallWidth, smallDepth);
+
+    // punkty karne
+    const topPenaltySpot = { x: center.x, y: topBoxY + penaltyDepth - cellSize * 0.8 };
+    const botPenaltySpot = { x: center.x, y: bottomBoxY + cellSize * 0.8 };
+
+    ctx.moveTo(topPenaltySpot.x + 1.5, topPenaltySpot.y);
+    ctx.arc(topPenaltySpot.x, topPenaltySpot.y, 1.5, 0, Math.PI * 2);
+
+    ctx.moveTo(botPenaltySpot.x + 1.5, botPenaltySpot.y);
+    ctx.arc(botPenaltySpot.x, botPenaltySpot.y, 1.5, 0, Math.PI * 2);
+
     ctx.stroke();
 
-    // bramki (proste)
-    const goalW = gx * 2;
-    // górna
-    ctx.strokeRect(midX - goalW / 2, fy - gy * 0.6, goalW, gy * 0.6);
-    // dolna
-    ctx.strokeRect(midX - goalW / 2, fy + fh, goalW, gy * 0.6);
-  }
-
-  function drawLinesAndNodes() {
-    // linie ruchów
-    ctx.strokeStyle = "rgba(255,255,255,0.95)";
-    ctx.lineWidth = 2;
-
-    for (const l of usedLines) {
-      const a = gridToPx(l.x1, l.y1);
-      const b = gridToPx(l.x2, l.y2);
-      ctx.beginPath();
-      ctx.moveTo(a.px, a.py);
-      ctx.lineTo(b.px, b.py);
-      ctx.stroke();
-    }
-
-    // węzły
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const p = gridToPx(x, y);
-        ctx.beginPath();
-        ctx.arc(p.px, p.py, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    // zaznaczenie
-    if (selected) {
-      const p = gridToPx(selected.x, selected.y);
-      ctx.strokeStyle = "rgba(255,255,0,0.9)";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(p.px, p.py, 10, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    // piłka
-    const bp = gridToPx(ball.x, ball.y);
-    ctx.fillStyle = "#fff";
+    // bramki – czerwone pola na liniach końcowych
+    ctx.strokeStyle = "#ff5555";
+    ctx.lineWidth   = 6;
     ctx.beginPath();
-    ctx.arc(bp.px, bp.py, 7, 0, Math.PI * 2);
+
+    // górna bramka
+    let pA = gridToPx(goalTop.xStart, goalTop.y);
+    let pB = gridToPx(goalTop.xEnd,   goalTop.y);
+    ctx.moveTo(pA.x, pA.y - cellSize * 0.35);
+    ctx.lineTo(pB.x, pB.y - cellSize * 0.35);
+
+    // dolna bramka
+    pA = gridToPx(goalBottom.xStart, goalBottom.y);
+    pB = gridToPx(goalBottom.xEnd,   goalBottom.y);
+    ctx.moveTo(pA.x, pA.y + cellSize * 0.35);
+    ctx.lineTo(pB.x, pB.y + cellSize * 0.35);
+
+    ctx.stroke();
+}
+
+// ----------------------------------------------------
+// PUNKTY, LINIE, PIŁKA
+// ----------------------------------------------------
+function drawPoint(x, y) {
+    const p = gridToPx(x, y);
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#0b1f46";
+    ctx.fill();
+}
+
+function drawLine(x1, y1, x2, y2) {
+    const p1 = gridToPx(x1, y1);
+    const p2 = gridToPx(x2, y2);
+
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth   = 2.2;
+    ctx.lineCap     = "round";
+
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+}
+
+// piłka – cartoon
+function drawBallAtPixel(px, py) {
+    const r = cellSize * 0.33;
+
+    // cień
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.ellipse(px + r * 0.25, py + r * 0.35, r * 0.8, r * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // kula
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = "#fdfdfd";
     ctx.fill();
 
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(bp.px, bp.py, 7, 0, Math.PI * 2);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#222222";
     ctx.stroke();
-  }
 
-  function render() {
+    // „łaty”
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#555555";
+
+    ctx.beginPath();
+    ctx.moveTo(px, py - r);
+    ctx.lineTo(px - r * 0.45, py - r * 0.2);
+    ctx.lineTo(px, py);
+    ctx.lineTo(px + r * 0.45, py - r * 0.2);
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(px - r * 0.15, py + r * 0.1);
+    ctx.lineTo(px - r * 0.45, py + r * 0.55);
+    ctx.lineTo(px + r * 0.1,  py + r * 0.4);
+    ctx.closePath();
+    ctx.stroke();
+
+    // highlight
+    ctx.beginPath();
+    ctx.arc(px - r * 0.35, py - r * 0.35, r * 0.18, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fill();
+}
+
+function drawBall(x, y) {
+    const p = gridToPx(x, y);
+    drawBallAtPixel(p.x, p.y);
+}
+
+// ----------------------------------------------------
+// RYSOWANIE CAŁOŚCI
+// ----------------------------------------------------
+function drawBoard() {
+    if (!ctx || !canvas) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    drawStands();
     drawPitch();
-    drawLinesAndNodes();
 
-    if (statusEl) {
-      if (status === "waiting") statusEl.textContent = "Oczekiwanie na 2 gracza…";
-      else if (status === "playing") statusEl.textContent = "Gra trwa";
-      else if (status === "finished") statusEl.textContent = "Koniec gry";
-      else statusEl.textContent = "Trwa ładowanie gry…";
+    // siatka punktów
+    for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+            drawPoint(x, y);
+        }
     }
 
-    if (infoTurn) {
-      if (status === "playing") {
-        infoTurn.textContent = (currentPlayer === myPlayer) ? "Twoja tura" : "Tura przeciwnika";
-      } else {
-        infoTurn.textContent = "";
-      }
+    // linie ruchów
+    for (let line of usedLines) {
+        drawLine(line.x1, line.y1, line.x2, line.y2);
     }
-  }
 
-  async function syncState() {
-    if (syncing) return;
-    syncing = true;
+    // piłka (jeśli nie trwa animacja)
+    if (!animating) {
+        drawBall(ball.x, ball.y);
+    }
+}
 
-    try {
-      const r = await fetch("state.php?game_id=" + encodeURIComponent(gameId), { cache: "no-store" });
-      const raw = await r.text();
+// ----------------------------------------------------
+// LOGIKA – linie, ruchy, odbicia
+// ----------------------------------------------------
+function isLineUsed(x1, y1, x2, y2) {
+    return usedLines.some(l =>
+        (l.x1 === x1 && l.y1 === y1 && l.x2 === x2 && l.y2 === y2) ||
+        (l.x1 === x2 && l.y1 === y2 && l.x2 === x1 && l.y2 === y1)
+    );
+}
 
-      if (!r.ok) {
-        console.error("state.php HTTP", r.status, raw);
-        status = "loading";
-        if (statusEl) statusEl.textContent = "Błąd state.php: HTTP " + r.status;
+function addLine(x1, y1, x2, y2) {
+    usedLines.push({ x1, y1, x2, y2 });
+}
+
+// walidacja ruchu – z zakazem jazdy wzdłuż ściany
+function isValidMove(x, y) {
+    if (x < 0 || x >= cols || y < 0 || y >= rows) return false;
+
+    const dx = Math.abs(x - ball.x);
+    const dy = Math.abs(y - ball.y);
+
+    if (dx > 1 || dy > 1 || (dx === 0 && dy === 0)) return false;
+
+    if (isLineUsed(ball.x, ball.y, x, y)) return false;
+
+    const onLeftWallSlide   = (ball.x === 0        && x === 0        && ball.y !== y);
+    const onRightWallSlide  = (ball.x === cols - 1 && x === cols - 1 && ball.y !== y);
+    const onTopWallSlide    = (ball.y === 0        && y === 0        && ball.x !== x);
+    const onBottomWallSlide = (ball.y === rows - 1 && y === rows - 1 && ball.x !== x);
+
+    if (onLeftWallSlide || onRightWallSlide || onTopWallSlide || onBottomWallSlide) {
+        return false;
+    }
+
+    return true;
+}
+
+// odbicie
+function hasBounce(x, y) {
+    if (x === 0 || x === cols - 1) return true;
+    if (y === 0 || y === rows - 1) return true;
+
+    let degree = 0;
+    for (let line of usedLines) {
+        if ((line.x1 === x && line.y1 === y) || (line.x2 === x && line.y2 === y)) {
+            degree++;
+            if (degree >= 2) return true;
+        }
+    }
+    return false;
+}
+
+// bramka
+function isGoal(x, y) {
+    if (y === goalBottom.y && x >= goalBottom.xStart && x <= goalBottom.xEnd) return 1;
+    if (y === goalTop.y    && x >= goalTop.xStart    && x <= goalTop.xEnd)    return 2;
+    return 0;
+}
+
+// ----------------------------------------------------
+// ANIMACJA PIŁKI
+// ----------------------------------------------------
+function startBallAnimation(fromX, fromY, toX, toY) {
+    animating     = true;
+    animStartTime = performance.now();
+    animFrom      = gridToPx(fromX, fromY);
+    animTo        = gridToPx(toX,   toY);
+
+    function step(now) {
+        if (!animating) return;
+
+        const t = Math.min(1, (now - animStartTime) / animDuration);
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+        const x = animFrom.x + (animTo.x - animFrom.x) * ease;
+        const y = animFrom.y + (animTo.y - animFrom.y) * ease;
+
+        drawBoard();
+        drawBallAtPixel(x, y);
+
+        if (t < 1) requestAnimationFrame(step);
+        else {
+            animating = false;
+            drawBoard();
+        }
+    }
+
+    requestAnimationFrame(step);
+}
+
+// ----------------------------------------------------
+// WYKONANIE RUCHU + WYSŁANIE DO BACKENDU
+// ----------------------------------------------------
+function makeMove(x, y) {
+    if (isSendingMove) return;
+
+    const prev = { x: ball.x, y: ball.y };
+
+    const goal = isGoal(x, y);
+    if (goal) {
+        addLine(ball.x, ball.y, x, y);
+        ball.x = x;
+        ball.y = y;
+        startBallAnimation(prev.x, prev.y, x, y);
+        sendMove(prev.x, prev.y, x, y, 0, 1, 0);
         return;
-      }
-
-      const data = JSON.parse(raw);
-      if (!data || data.ok !== true || !data.game) {
-        console.error("state.php bad JSON payload:", data);
-        return;
-      }
-
-      const g = data.game;
-
-      // nazwy graczy
-      if (p1NameEl) p1NameEl.textContent = g.player1_name ?? "Gracz 1";
-      if (p2NameEl) p2NameEl.textContent = g.player2_name ?? (mode === "bot" ? "BOT" : "Gracz 2");
-
-      status = String(g.status ?? "playing");
-      currentPlayer = Number(g.current_player ?? 1);
-      winner = Number(g.winner ?? 0);
-
-      // Linie i piłka
-      if (Array.isArray(g.used_lines)) {
-        usedLines = normalizeLines(g.used_lines);
-      } else if (Array.isArray(g.moves)) {
-        // kompatybilność: gdyby kiedyś backend zwracał moves
-        usedLines = normalizeLines(g.moves);
-      }
-
-      ball.x = Number(g.ball_x ?? 4);
-      ball.y = Number(g.ball_y ?? 6);
-
-      render();
-
-    } catch (e) {
-      console.error("syncState error", e);
-    } finally {
-      syncing = false;
-    }
-  }
-
-  async function sendMove(from, to) {
-    // lokalnie dopisz linię i przesuń piłkę (optymistycznie)
-    usedLines.push({ x1: from.x, y1: from.y, x2: to.x, y2: to.y });
-    ball.x = to.x; ball.y = to.y;
-
-    const goal = isGoal(to.x, to.y) ? 1 : 0;
-    const extra = goal ? 0 : (hasBounce(to.x, to.y) ? 1 : 0);
-
-    render();
-
-    const body = new URLSearchParams();
-    body.set("game_id", String(gameId));
-    body.set("from_x", String(from.x));
-    body.set("from_y", String(from.y));
-    body.set("to_x", String(to.x));
-    body.set("to_y", String(to.y));
-    body.set("extra", String(extra));
-    body.set("goal", String(goal));
-    body.set("draw", "0");
-
-    try {
-      const r = await fetch("move.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body
-      });
-
-      const raw = await r.text();
-
-      if (!r.ok) {
-        console.error("move.php HTTP", r.status, raw);
-        alert("Serwer zwrócił błąd HTTP " + r.status + ". Odpowiedź:\n" + raw);
-        await syncState(); // odśwież po błędzie
-        return;
-      }
-
-      const data = JSON.parse(raw);
-      if (!data || data.ok !== true) {
-        alert(data?.error ? String(data.error) : "Nieznany błąd ruchu.");
-        await syncState();
-        return;
-      }
-
-      // po udanym ruchu dociągnij pełny stan (w tym bot / winner / itp.)
-      await syncState();
-
-    } catch (e) {
-      console.error("sendMove error", e);
-      alert("Wystąpił błąd po stronie serwera przy wysyłaniu ruchu.");
-      await syncState();
-    }
-  }
-
-  canvas.addEventListener("click", async (ev) => {
-    if (status !== "playing") return;
-    if (currentPlayer !== myPlayer) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const px = ev.clientX - rect.left;
-    const py = ev.clientY - rect.top;
-
-    const p = findNearestPoint(px, py);
-    if (!p) return;
-
-    if (!selected) {
-      // start tylko z piłki
-      if (p.x === ball.x && p.y === ball.y) {
-        selected = p;
-        render();
-      }
-      return;
     }
 
-    // drugi klik = cel
-    const from = selected;
-    const to = p;
+    addLine(ball.x, ball.y, x, y);
+    ball.x = x;
+    ball.y = y;
 
-    // reset selection
-    selected = null;
+    const extra = hasBounce(x, y) ? 1 : 0;
+    startBallAnimation(prev.x, prev.y, x, y);
+    sendMove(prev.x, prev.y, x, y, extra, 0, 0);
+}
 
-    if (!isValidMove(from, to)) {
-      render();
-      return;
+// ----------------------------------------------------
+// KLIK NA PLANSZY
+// ----------------------------------------------------
+if (canvas && ctx) {
+    canvas.addEventListener("click", function (e) {
+        if (canvas.style.pointerEvents === "none") return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        const x = Math.round((mx - boardOffsetX) / cellSize);
+        const y = Math.round((my - boardOffsetY) / cellSize);
+
+        if (!isValidMove(x, y)) return;
+
+        makeMove(x, y);
+    });
+}
+
+// ----------------------------------------------------
+// WYŚLIJ RUCH DO BACKENDU
+// ----------------------------------------------------
+function sendMove(fromX, fromY, toX, toY, extra, goal, draw) {
+    if (!ajaxGameID) return;
+
+    isSendingMove = true;
+
+    const data = new FormData();
+    data.append("game_id", ajaxGameID);
+    data.append("from_x", fromX);
+    data.append("from_y", fromY);
+    data.append("to_x", toX);
+    data.append("to_y", toY);
+    data.append("extra", extra ? 1 : 0);
+    data.append("goal", goal ? 1 : 0);
+    data.append("draw", draw ? 1 : 0);
+
+    fetch("move.php", { method: "POST", body: data })
+        .then(async (r) => {
+            const raw = await r.text();
+            console.log("move.php RAW RESPONSE:", raw);
+
+            if (!r.ok) {
+                alert("Serwer zwrócił błąd HTTP " + r.status + ". Odpowiedź:\n\n" + raw.slice(0, 400));
+                throw new Error("HTTP " + r.status);
+            }
+
+            let resp;
+            try { resp = JSON.parse(raw); }
+            catch (e) {
+                alert("Serwer zwrócił niepoprawny JSON.\nPoczątek:\n\n" + raw.slice(0, 400));
+                throw e;
+            }
+
+            if (resp && resp.error) alert("Błąd z move.php: " + resp.error);
+
+            syncGame();
+        })
+        .catch(err => {
+            console.error("Błąd podczas wysyłania ruchu move.php:", err);
+            alert("Wystąpił błąd po stronie serwera przy wysyłaniu ruchu.");
+        })
+        .finally(() => { isSendingMove = false; });
+}
+
+// ----------------------------------------------------
+// SYNC PVP/BOT – co 700 ms
+// ----------------------------------------------------
+function syncGame() {
+    if (!ajaxGameID || !canvas || !ctx) return;
+
+    const infoTurn = document.getElementById("ps-turn-info");
+
+    fetch("state.php?game_id=" + encodeURIComponent(ajaxGameID))
+        .then(async (r) => {
+            const raw = await r.text();
+
+            if (!r.ok) {
+                if (infoTurn) infoTurn.textContent = "Błąd state.php: HTTP " + r.status;
+                console.error("state.php HTTP error", r.status, raw.slice(0, 400));
+                throw new Error("HTTP " + r.status);
+            }
+
+            try {
+                return JSON.parse(raw);
+            } catch (e) {
+                if (infoTurn) infoTurn.textContent = "Błąd state.php: niepoprawny JSON";
+                console.error("state.php JSON parse error", raw.slice(0, 400));
+                throw e;
+            }
+        })
+        .then(state => {
+            const p1NameEl = document.getElementById("ps-p1-name");
+            const p2NameEl = document.getElementById("ps-p2-name");
+            const p1GoalEl = document.getElementById("ps-p1-goal");
+            const p2GoalEl = document.getElementById("ps-p2-goal");
+            const scoreEl  = document.getElementById("ps-score");
+
+            if (!state || !state.game) {
+                if (infoTurn) infoTurn.textContent = "Błąd stanu gry.";
+                return;
+            }
+
+            if (state.error) {
+                if (infoTurn) infoTurn.textContent = "Błąd: " + state.error;
+                return;
+            }
+
+            const p1Name = state.game.player1_name || "Gracz 1";
+            const p2Name = state.game.player2_name || "Gracz 2";
+
+            if (p1NameEl) p1NameEl.textContent = p1Name;
+            if (p2NameEl) p2NameEl.textContent = p2Name;
+
+            // POPRAWKA: opisy bramek zależne od tego, kim jesteś
+            if (ajaxPlayer === 1) {
+                if (p1GoalEl) p1GoalEl.textContent = "Atakujesz bramkę na dole";
+                if (p2GoalEl) p2GoalEl.textContent = "Przeciwnik atakuje bramkę u góry";
+            } else if (ajaxPlayer === 2) {
+                if (p1GoalEl) p1GoalEl.textContent = "Przeciwnik atakuje bramkę na dole";
+                if (p2GoalEl) p2GoalEl.textContent = "Atakujesz bramkę u góry";
+            }
+
+            // localStorage wynik (tylko raz)
+            if (!scoresLoaded) {
+                scoreKey = "ps_score_" + p1Name + "_" + p2Name;
+                try {
+                    const stored = localStorage.getItem(scoreKey);
+                    if (stored) {
+                        const parsed = JSON.parse(stored);
+                        scoreP1 = parsed.p1 || 0;
+                        scoreP2 = parsed.p2 || 0;
+                    }
+                } catch (e) {
+                    console.warn("Nie udało się odczytać wyniku z localStorage:", e);
+                }
+                if (scoreEl) scoreEl.textContent = scoreP1 + " : " + scoreP2;
+                scoresLoaded = true;
+            }
+
+            // OCZEKIWANIE
+            if (state.game.status === "waiting") {
+                if (infoTurn) infoTurn.textContent = "Oczekiwanie na drugiego gracza...";
+                canvas.style.pointerEvents = "none";
+                return;
+            }
+
+            // KONIEC GRY
+            if (state.game.status === "finished") {
+
+                if (Array.isArray(state.moves) && state.moves.length !== movesLoaded) {
+                    reloadMoves(state.moves);
+                    movesLoaded = state.moves.length;
+                }
+
+                let reason = "nomove";
+                if (state.game.winner == 0) reason = "draw";
+
+                if (Array.isArray(state.moves) && state.moves.length > 0) {
+                    const last = state.moves[state.moves.length - 1];
+                    const lx = Number(last.to_x);
+                    const ly = Number(last.to_y);
+
+                    if (
+                        (ly === goalTop.y    && lx >= goalTop.xStart    && lx <= goalTop.xEnd) ||
+                        (ly === goalBottom.y && lx >= goalBottom.xStart && lx <= goalBottom.xEnd)
+                    ) {
+                        reason = "goal";
+                    }
+                }
+
+                const winner = parseInt(state.game.winner, 10);
+                const me = ajaxPlayer;
+
+                if (!scoreCountedForGame) {
+                    if (winner === 1) scoreP1++;
+                    else if (winner === 2) scoreP2++;
+
+                    if (scoreEl) scoreEl.textContent = scoreP1 + " : " + scoreP2;
+
+                    if (scoreKey) {
+                        try {
+                            localStorage.setItem(scoreKey, JSON.stringify({ p1: scoreP1, p2: scoreP2 }));
+                        } catch (e) {
+                            console.warn("Nie udało się zapisać wyniku do localStorage:", e);
+                        }
+                    }
+                    scoreCountedForGame = true;
+                }
+
+                if (infoTurn) {
+                    let msg = "";
+
+                    if (winner === 0 || reason === "draw") {
+                        msg = "🤝 Gra zakończona remisem.";
+                    } else if (winner === me) {
+                        msg = (reason === "goal")
+                            ? "🏆 Gratulacje, wygrałeś! Strzeliłeś gola!"
+                            : "🏆 Gratulacje, wygrałeś! Przeciwnik nie ma ruchu!";
+                    } else {
+                        msg = (reason === "goal")
+                            ? "❌ Niestety, przegrałeś! Straciłeś gola!"
+                            : "❌ Niestety, przegrałeś! Nie masz ruchu!";
+                    }
+
+                    infoTurn.innerHTML = msg;
+                }
+
+                canvas.style.pointerEvents = "none";
+
+                const rematchBtn = document.getElementById("ps-rematch");
+                if (rematchBtn) rematchBtn.style.display = "inline-block";
+
+                return;
+            }
+
+            // CZYJA KOLEJ?
+            if (state.game.current_player == ajaxPlayer) {
+                if (infoTurn) infoTurn.innerHTML = "👉 Twoja kolej";
+                canvas.style.pointerEvents = "auto";
+            } else {
+                if (infoTurn) infoTurn.innerHTML = "⏳ Kolej przeciwnika";
+                canvas.style.pointerEvents = "none";
+            }
+
+            // Nowe ruchy
+            if (Array.isArray(state.moves) && state.moves.length !== movesLoaded) {
+                reloadMoves(state.moves);
+                movesLoaded = state.moves.length;
+            }
+        })
+        .catch(err => {
+            console.error("Błąd podczas pobierania state.php:", err);
+        });
+}
+
+// ----------------------------------------------------
+// ODTWARZANIE ruchów z bazy
+// ----------------------------------------------------
+function reloadMoves(moves) {
+    usedLines = [];
+    ball = { x: 4, y: 6 };
+
+    for (let mv of moves) {
+        // POPRAWKA: rzutowanie na Number() – dokładnie o to chodziło
+        addLine(Number(mv.from_x), Number(mv.from_y), Number(mv.to_x), Number(mv.to_y));
+        ball.x = Number(mv.to_x);
+        ball.y = Number(mv.to_y);
     }
+    drawBoard();
+}
 
-    await sendMove(from, to);
-  });
+// start + rewanż
+if (canvas && ctx) {
+    drawBoard();
+    syncGame();
+    setInterval(syncGame, 700);
+}
 
-  // Start
-  render();
-  syncState();
-  setInterval(syncState, 900);
-})();
+const rematchBtn = document.getElementById("ps-rematch");
+if (rematchBtn && canvas) {
+    rematchBtn.addEventListener("click", function () {
+        if (gameMode === "bot") {
+            window.location.href =
+                "create_game.php?mode=bot&bot_difficulty=" + encodeURIComponent(botDiff);
+        } else {
+            window.location.href = "pvp.php";
+        }
+    });
+}

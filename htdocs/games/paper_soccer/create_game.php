@@ -2,8 +2,10 @@
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/auth.php';
 
+// tryb gry może pochodzić z POST albo GET
 $mode = $_POST['mode'] ?? $_GET['mode'] ?? null;
-if (!in_array($mode, ['bot', 'pvp'], true)) {
+
+if (!in_array($mode, ['bot', 'pvp'])) {
     die("Nieprawidłowy tryb gry.");
 }
 
@@ -11,29 +13,19 @@ function random_code($len = 6) {
     $c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     $o = '';
     for ($i = 0; $i < $len; $i++) {
-        $o .= $c[random_int(0, strlen($c) - 1)];
+        $o .= $c[rand(0, strlen($c) - 1)];
     }
     return $o;
 }
 
 $code = random_code();
 
-// Gracz 1
-$player1_id   = is_logged_in() ? (int)($_SESSION['user_id'] ?? 0) : (int)($_SESSION['guest_id'] ?? 0);
-$player1_name = is_logged_in() ? ($_SESSION['username'] ?? 'Gracz') : ($_SESSION['guest_name'] ?? 'Gość');
-
-if ($player1_id <= 0) {
-    die("Brak identyfikacji gracza (sesja).");
-}
-
-// Start boiska (jak w move.php/state.php)
-$ball_x = 4;
-$ball_y = 6;
-$used_lines_json = '[]';
-$winner = 0;
-$current_player = 1;
+// Identyfikacja gracza 1
+$player1_id  = is_logged_in() ? (int)$_SESSION['user_id'] : (int)$_SESSION['guest_id'];
+$player1_name = is_logged_in() ? $_SESSION['username'] : $_SESSION['guest_name'];
 
 if ($mode === 'bot') {
+
     $difficulty_raw = (int)($_POST['bot_difficulty'] ?? $_GET['bot_difficulty'] ?? 1);
     $difficulty = max(1, min(4, $difficulty_raw));
 
@@ -42,44 +34,34 @@ if ($mode === 'bot') {
             code, mode, bot_difficulty,
             player1_id, player1_name,
             player2_id, player2_name,
-            status, current_player,
-            ball_x, ball_y, used_lines, winner
+            status, current_player
         ) VALUES (
-            ?, 'bot', ?,
-            ?, ?,
-            0, 'BOT',
-            'playing', ?,
-            ?, ?, ?, ?
+            ?, 'bot', ?, ?, ?, 0, 'BOT', 'playing', 1
         )
     ");
-    if (!$stmt) die("DB error: ".$conn->error);
 
-    $stmt->bind_param("siisiiii", $code, $difficulty, $player1_id, $player1_name, $current_player, $ball_x, $ball_y, $used_lines_json, $winner);
+    $stmt->bind_param("siis", $code, $difficulty, $player1_id, $player1_name);
+
 } else {
+
     $stmt = $conn->prepare("
         INSERT INTO paper_soccer_games (
             code, mode, bot_difficulty,
             player1_id, player1_name,
             player2_id, player2_name,
-            status, current_player,
-            ball_x, ball_y, used_lines, winner
+            status, current_player
         ) VALUES (
-            ?, 'pvp', NULL,
-            ?, ?,
-            0, NULL,
-            'waiting', ?,
-            ?, ?, ?, ?
+            ?, 'pvp', NULL, ?, ?, 0, NULL, 'waiting', 1
         )
     ");
-    if (!$stmt) die("DB error: ".$conn->error);
 
-    $stmt->bind_param("isiiiiii", $code, $player1_id, $player1_name, $current_player, $ball_x, $ball_y, $used_lines_json, $winner);
+    $stmt->bind_param("sis", $code, $player1_id, $player1_name);
 }
 
 $stmt->execute();
-$game_id = (int)$stmt->insert_id;
+$game_id = $stmt->insert_id;
 $stmt->close();
 
-// WŁAŚCIWE przekierowanie do gry (to obsługuje lobby PvP i bot)
-header("Location: play.php?game_id=" . $game_id);
+// przekieruj do lobby/gry
+header("Location: index.php?game_id=" . $game_id);
 exit;
