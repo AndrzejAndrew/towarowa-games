@@ -40,80 +40,71 @@ if ($game_id <= 0) {
 // ----------------------------------------------------
 function ps_user_exists(mysqli $conn, int $user_id): bool {
     if ($user_id <= 0) return false;
-    $st = $conn->prepare("SELECT 1 FROM users WHERE id = ? LIMIT 1");
+    $st = $conn->prepare("SELECT 1 FROM users WHERE id=? LIMIT 1");
     if (!$st) return false;
     $st->bind_param("i", $user_id);
     $st->execute();
     $st->store_result();
-    $ok = ($st->num_rows > 0);
+    $ok = $st->num_rows > 0;
     $st->close();
     return $ok;
 }
 
-function ps_add_result($conn, $user_id, $result) {
-    // Wyniki zapisujemy wyłącznie dla użytkowników zalogowanych (istniejących w tabeli users).
-    // Gość ma w sesji losowe guest_id (6 cyfr), które nie jest rekordem w users.
-    if ($user_id <= 0) return;
-    if (!ps_user_exists($conn, (int)$user_id)) return;
+function ps_add_result(mysqli $conn, int $user_id, string $result): void {
+    // Nie zapisujemy wyników dla guest_id
+    if (!ps_user_exists($conn, $user_id)) return;
 
-    $won = $lost = $drawn = 0;
-    if ($result === 'win')  $won = 1;
-    if ($result === 'loss') $lost = 1;
-    if ($result === 'draw') $drawn = 1;
+    // 1) per-game wynik (paper_soccer_stats)
+    $st = $conn->prepare("INSERT INTO paper_soccer_stats (user_id, games_played, wins, draws, losses)
+                          VALUES (?,1, ?, ?, ?)
+                          ON DUPLICATE KEY UPDATE
+                            games_played = games_played + 1,
+                            wins  = wins  + VALUES(wins),
+                            draws = draws + VALUES(draws),
+                            losses= losses+ VALUES(losses)");
+    if ($st) {
+        $win  = ($result === 'win') ? 1 : 0;
+        $draw = ($result === 'draw') ? 1 : 0;
+        $loss = ($result === 'loss') ? 1 : 0;
+        $st->bind_param("iiii", $user_id, $win, $draw, $loss);
+        $st->execute();
+        $st->close();
+    }
 
-    // Lokalny ranking Paper Soccer
-    $sql = "
-        INSERT INTO paper_soccer_stats (
-            user_id, games_played, games_won, games_lost, games_drawn, last_played
-        ) VALUES (?, 1, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE
-            games_played = games_played + 1,
-            games_won    = games_won + VALUES(games_won),
-            games_lost   = games_lost + VALUES(games_lost),
-            games_drawn  = games_drawn + VALUES(games_drawn),
-            last_played  = NOW()
-    ";
-
-    $st = $conn->prepare($sql);
-    if (!$st) return;
-    $st->bind_param("iiii", $user_id, $won, $lost, $drawn);
-    $st->execute();
-    $st->close();
-
-    // 🔥 GLOBALNE STATYSTYKI PORTALU (XP + game_results)
-    // game_code = 'paper_soccer', punkty = 0 (tu nie liczymy punktów)
-    stats_register_result($user_id, 'paper_soccer', $result);
+    // 2) globalny system XP/odznak
+    $ok_global = stats_register_result($user_id, 'paper_soccer', $result);
+    if ($ok_global === false) {
+        ps_log("WARN stats_register_result failed user_id={$user_id}, result={$result}");
+    }
 }
 
-function ps_update_ranking_for_finished_game($conn, $game_before, $winner) {
-    if ($game_before['status'] === 'finished') return;
+function ps_update_ranking_for_finished_game(mysqli $conn, array $game, int $winner): void {
+    // winner: 1 lub 2
+    $p1 = (int)$game['player1_id'];
+    $p2 = (int)$game['player2_id'];
+    $mode = $game['mode'];
 
-    $p1 = (int)$game_before['player1_id'];
-    $p2 = (int)$game_before['player2_id'];
-
-    if ($game_before['mode'] === 'pvp') {
-        if ($winner == 1) {
-            ps_add_result($conn, $p1, "win");
-            ps_add_result($conn, $p2, "loss");
-        } elseif ($winner == 2) {
-            ps_add_result($conn, $p2, "win");
-            ps_add_result($conn, $p1, "loss");
-        } else {
-            ps_add_result($conn, $p1, "draw");
-            ps_add_result($conn, $p2, "draw");
-        }
+    if ($mode === 'bot') {
+        // w trybie bot zapisujemy wynik tylko dla gracza 1 (user)
+        if ($winner === 1) ps_add_result($conn, $p1, 'win');
+        else ps_add_result($conn, $p1, 'loss');
+        return;
     }
-    else {
-        if ($winner == 1) ps_add_result($conn, $p1, "win");
-        elseif ($winner == 2) ps_add_result($conn, $p1, "loss");
-        else ps_add_result($conn, $p1, "draw");
+
+    // pvp: zapisujemy dla obu
+    if ($winner === 1) {
+        ps_add_result($conn, $p1, 'win');
+        ps_add_result($conn, $p2, 'loss');
+    } elseif ($winner === 2) {
+        ps_add_result($conn, $p1, 'loss');
+        ps_add_result($conn, $p2, 'win');
     }
 }
 
 // ----------------------------------------------------
-// Load game
+// POBRANIE GRY
 // ----------------------------------------------------
-$stmt = $conn->prepare("SELECT * FROM paper_soccer_games WHERE id=?");
+$stmt = $conn->prepare("SELECT * FROM paper_soccer_games WHERE id = ?");
 $stmt->bind_param("i", $game_id);
 $stmt->execute();
 $game = $stmt->get_result()->fetch_assoc();
@@ -123,226 +114,159 @@ if (!$game) {
     echo json_encode(["error" => "Gra nie istnieje"]);
     exit;
 }
-if ($game['status'] === 'finished') {
-    echo json_encode(["error" => "Gra zakończona"]);
-    exit;
-}
-
-ps_log("GAME id={$game['id']}, current_player={$game['current_player']}");
-
-$game_before = $game;
 
 // ----------------------------------------------------
-// Determine player number
+// WALIDACJA TUR
 // ----------------------------------------------------
-$my_id = is_logged_in() ? ($_SESSION['user_id'] ?? 0) : ($_SESSION['guest_id'] ?? 0);
+$current_player = (int)$game['current_player'];
+$mode = $game['mode'];
 
-if ($my_id == $game['player1_id']) {
-    $player = 1;
-} elseif ($my_id == $game['player2_id']) {
-    $player = 2;
-} else {
-    $player = (int)$game['current_player']; // fallback
-}
+$me_id = is_logged_in() ? (int)$_SESSION['user_id'] : (int)($_SESSION['guest_id'] ?? 0);
 
-ps_log("PLAYER=$player (my_id=$my_id)");
-
-// ----------------------------------------------------
-// BEFORE ACCEPTING MOVE: backend validation (!!)
-// ----------------------------------------------------
-
-$stmt = $conn->prepare("
-    SELECT from_x, from_y, to_x, to_y
-    FROM paper_soccer_moves 
-    WHERE game_id=?
-    ORDER BY move_no ASC
-");
-$stmt->bind_param("i", $game_id);
-$stmt->execute();
-$res = $stmt->get_result();
-$stmt->close();
-
-$usedLines = [];
-$ball = ["x" => 4, "y" => 6];
-while ($row = $res->fetch_assoc()) {
-    $usedLines[] = [
-        "x1" => $row["from_x"],
-        "y1" => $row["from_y"],
-        "x2" => $row["to_x"],
-        "y2" => $row["to_y"]
-    ];
-    $ball = ["x" => $row["to_x"], "y" => $row["to_y"]];
-}
-
-// BACKEND WALIDACJA ruchu gracza
-if (!ps_is_valid_move_backend($from_x, $from_y, $to_x, $to_y, $usedLines)) {
-    ps_log("INVALID_PLAYER_MOVE BLOCKED from=($from_x,$from_y) to=($to_x,$to_y)");
-    echo json_encode(["error" => "Nielegalny ruch"]);
-    exit;
-}
-
-// ----------------------------------------------------
-// Save player move
-// ----------------------------------------------------
-ps_log("PLAYER_MOVE ($from_x,$from_y)→($to_x,$to_y) extra=$extra");
-
-$stmt = $conn->prepare("
-    INSERT INTO paper_soccer_moves (game_id, move_no, player, from_x, from_y, to_x, to_y)
-    SELECT ?, IFNULL(MAX(move_no),0)+1, ?, ?, ?, ?, ?
-    FROM paper_soccer_moves WHERE game_id=?
-");
-$stmt->bind_param("iiiiiii",
-    $game_id, $player,
-    $from_x, $from_y, $to_x, $to_y,
-    $game_id
-);
-$stmt->execute();
-$stmt->close();
-
-
-// ----------------------------------------------------
-// Goal?
-// ----------------------------------------------------
-if ($goal > 0) {
-    $winner = 0;
-
-    if ($to_y == 12 && $to_x >= 3 && $to_x <= 5) $winner = 1;
-    if ($to_y == 0  && $to_x >= 3 && $to_x <= 5) $winner = 2;
-
-    $conn->query("UPDATE paper_soccer_games SET status='finished', winner=$winner, current_player=0 WHERE id=$game_id");
-    ps_update_ranking_for_finished_game($conn, $game_before, $winner);
-
-    ps_log("FINISHED BY GOAL winner=$winner");
-    echo json_encode(["ok" => true, "finished" => "goal", "winner" => $winner]);
-    exit;
-}
-
-
-// ----------------------------------------------------
-// DRAW?
-// ----------------------------------------------------
-if ($draw > 0) {
-    $conn->query("UPDATE paper_soccer_games SET status='finished', winner=0, current_player=0 WHERE id=$game_id");
-    ps_update_ranking_for_finished_game($conn, $game_before, 0);
-
-    echo json_encode(["ok" => true, "finished" => "draw"]);
-    exit;
-}
-
-
-// ----------------------------------------------------
-// TURN SWITCH
-// ----------------------------------------------------
-$next_player = ($extra == 1 ? $player : ($player == 1 ? 2 : 1));
-$conn->query("UPDATE paper_soccer_games SET current_player=$next_player WHERE id=$game_id");
-
-
-// ----------------------------------------------------
-// BOT TURN?
-// ----------------------------------------------------
-if ($game['mode'] === 'bot' && $next_player == 2) {
-
-    ps_log("BOT_TURN_START");
-
-    // Reload used lines + ball (bot begins)
-    $stmt = $conn->prepare("
-        SELECT from_x, from_y, to_x, to_y
-        FROM paper_soccer_moves 
-        WHERE game_id=?
-        ORDER BY move_no ASC
-    ");
-    $stmt->bind_param("i", $game_id);
-    $stmt->execute();
-    $res = $stmt->get_result();
-    $stmt->close();
-
-    $usedLines = [];
-    $ball = ["x" => 4, "y" => 6];
-
-    while ($row = $res->fetch_assoc()) {
-        $usedLines[] = [
-            "x1" => $row["from_x"],
-            "y1" => $row["from_y"],
-            "x2" => $row["to_x"],
-            "y2" => $row["to_y"]
-        ];
-        $ball = ["x" => $row["to_x"], "y" => $row["to_y"]];
+// w bot mode user zawsze gra jako 1
+if ($mode === 'bot') {
+    if ($current_player !== 1) {
+        echo json_encode(["error" => "Nie twoja tura"]);
+        exit;
     }
+} else {
+    // pvp
+    if ($current_player === 1 && $me_id !== (int)$game['player1_id']) {
+        echo json_encode(["error" => "Nie twoja tura"]);
+        exit;
+    }
+    if ($current_player === 2 && $me_id !== (int)$game['player2_id']) {
+        echo json_encode(["error" => "Nie twoja tura"]);
+        exit;
+    }
+}
 
-    $difficulty = (int)$game['bot_difficulty'];
-    $safety = 0;
+// ----------------------------------------------------
+// ODCZYT STANU Z DB
+// ----------------------------------------------------
+$ball_x = (int)$game['ball_x'];
+$ball_y = (int)$game['ball_y'];
+$usedLines = json_decode($game['used_lines'] ?? '[]', true);
+if (!is_array($usedLines)) $usedLines = [];
 
-    while (true) {
-        $safety++;
-        if ($safety > 50) {
-            ps_log("BOT_LOOP_SAFETY_BREAK");
-            break;
-        }
+ps_log("DB ball=($ball_x,$ball_y) current_player=$current_player lines=" . count($usedLines));
+
+// ----------------------------------------------------
+// WALIDACJA RUCHU
+// ----------------------------------------------------
+if ($from_x !== $ball_x || $from_y !== $ball_y) {
+    echo json_encode(["error" => "Zły punkt startowy"]);
+    exit;
+}
+
+// backendowa walidacja – używamy funkcji z bot.php
+if (!ps_is_valid_move_backend($from_x, $from_y, $to_x, $to_y, $usedLines)) {
+    echo json_encode(["error" => "Niepoprawny ruch (backend)"]);
+    exit;
+}
+
+// ----------------------------------------------------
+// DOPISZ LINIĘ + AKTUALIZUJ PIŁKĘ
+// ----------------------------------------------------
+$usedLines[] = ['x1'=>$from_x,'y1'=>$from_y,'x2'=>$to_x,'y2'=>$to_y];
+
+$ball_x = $to_x;
+$ball_y = $to_y;
+
+// ----------------------------------------------------
+// ZMIANA GRACZA (jeśli nie ma extra)
+// ----------------------------------------------------
+$winner = 0;
+
+if ($goal === 1) {
+    $winner = ($ball_y === 0) ? 2 : 1; // jeśli piłka na górze: wygrał gracz 2, na dole: gracz 1
+    $status = 'finished';
+} elseif ($draw === 1) {
+    $status = 'finished';
+} else {
+    $status = 'playing';
+}
+
+if ($status === 'playing') {
+    if ($extra === 0) {
+        $current_player = ($current_player === 1) ? 2 : 1;
+    }
+} else {
+    // finished
+    if ($winner !== 0) {
+        ps_update_ranking_for_finished_game($conn, $game, $winner);
+    }
+}
+
+// ----------------------------------------------------
+// ZAPIS DO DB
+// ----------------------------------------------------
+$usedLinesJson = json_encode($usedLines);
+
+$stmt = $conn->prepare("UPDATE paper_soccer_games
+                        SET used_lines=?, ball_x=?, ball_y=?, current_player=?, status=?, winner=?
+                        WHERE id=?");
+$stmt->bind_param("siiiisi", $usedLinesJson, $ball_x, $ball_y, $current_player, $status, $winner, $game_id);
+$stmt->execute();
+$stmt->close();
+
+// ----------------------------------------------------
+// RUCH BOTA (jeśli bot i tura bota)
+// ----------------------------------------------------
+if ($mode === 'bot' && $status === 'playing') {
+    // jeśli teraz jest tura bota
+    if ($current_player === 2) {
+        $difficulty = (int)($game['bot_difficulty'] ?? 1);
+        $ball = ['x'=>$ball_x,'y'=>$ball_y];
 
         $botMove = bot_choose_move($ball, $usedLines, $difficulty);
 
-        if ($botMove === null) {
-            // bot nie ma ruchu → wygrał gracz 1
-            $conn->query("UPDATE paper_soccer_games SET status='finished', winner=1, current_player=0 WHERE id=$game_id");
-            ps_update_ranking_for_finished_game($conn, $game_before, 1);
-            echo json_encode(["ok" => true, "finished" => "nomove", "winner" => 1]);
-            exit;
-        }
+        if ($botMove) {
+            // bot robi ruch w DB (symulujemy jak powyżej)
+            $from_x = $ball_x;
+            $from_y = $ball_y;
+            $to_x = (int)$botMove['x'];
+            $to_y = (int)$botMove['y'];
 
-        // BACKENDOWA WALIDACJA RUCHU BOTA  
-        if (!ps_is_valid_move_backend($ball['x'], $ball['y'], $botMove['x'], $botMove['y'], $usedLines)) {
-            ps_log("BOT_ILLEGAL_MOVE BLOCKED");
-            break;
-        }
+            $usedLines[] = ['x1'=>$from_x,'y1'=>$from_y,'x2'=>$to_x,'y2'=>$to_y];
+            $ball_x = $to_x;
+            $ball_y = $to_y;
 
-        // zapis ruchu
-        $stmt = $conn->prepare("
-            INSERT INTO paper_soccer_moves (game_id, move_no, player, from_x, from_y, to_x, to_y)
-            SELECT ?, IFNULL(MAX(move_no),0)+1, 2, ?, ?, ?, ?
-            FROM paper_soccer_moves WHERE game_id=?
-        ");
-        $stmt->bind_param("iiiiii",
-            $game_id,
-            $ball['x'], $ball['y'], 
-            $botMove['x'], $botMove['y'],
-            $game_id
-        );
-        $stmt->execute();
-        $stmt->close();
+            // czy bot ma extra?
+            $tmpLines = $usedLines;
+            $hasExtra = ps_backend_has_bounce($ball_x, $ball_y, $tmpLines) ? 1 : 0;
 
-        $usedLines[] = [
-            "x1" => $ball['x'],
-            "y1" => $ball['y'],
-            "x2" => $botMove['x'],
-            "y2" => $botMove['y']
-        ];
-        $ball = ["x" => $botMove['x'], "y" => $botMove['y']];
+            // gol?
+            $botGoal = ($ball_y === 0 && $ball_x >= 3 && $ball_x <= 5);
+            if ($botGoal) {
+                $status = 'finished';
+                $winner = 2;
+                ps_update_ranking_for_finished_game($conn, $game, $winner);
+            } else {
+                if ($hasExtra === 0) {
+                    $current_player = 1;
+                } else {
+                    $current_player = 2;
+                }
+            }
 
-        // gol?
-        if ($ball['y'] == 0 && $ball['x'] >= 3 && $ball['x'] <= 5) {
-            $conn->query("UPDATE paper_soccer_games SET status='finished', winner=2, current_player=0 WHERE id=$game_id");
-            ps_update_ranking_for_finished_game($conn, $game_before, 2);
-            echo json_encode(["ok" => true, "bot" => "goal", "winner" => 2]);
-            exit;
-        }
+            $usedLinesJson = json_encode($usedLines);
 
-        // bounce / extra
-        $botExtra = ps_backend_has_bounce($ball['x'], $ball['y'], $usedLines);
-
-        if (!$botExtra) {
-            $conn->query("UPDATE paper_soccer_games SET current_player=1 WHERE id=$game_id");
-            echo json_encode(["ok" => true, "bot" => "moved", "next" => 1]);
-            exit;
+            $stmt = $conn->prepare("UPDATE paper_soccer_games
+                                    SET used_lines=?, ball_x=?, ball_y=?, current_player=?, status=?, winner=?
+                                    WHERE id=?");
+            $stmt->bind_param("siiiisi", $usedLinesJson, $ball_x, $ball_y, $current_player, $status, $winner, $game_id);
+            $stmt->execute();
+            $stmt->close();
         }
     }
-
-    echo json_encode(["ok" => true, "bot" => "moved"]);
-    exit;
 }
 
-// ----------------------------------------------------
-// END (no bot)
-// ----------------------------------------------------
-echo json_encode(["ok" => true, "next" => $next_player]);
-exit;
-
+echo json_encode([
+    "ok" => true,
+    "ball_x" => $ball_x,
+    "ball_y" => $ball_y,
+    "current_player" => $current_player,
+    "status" => $status,
+    "winner" => $winner
+]);

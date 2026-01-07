@@ -14,9 +14,9 @@ if ($game_id <= 0) {
 }
 
 // -----------------------------
-// POBRANIE GRY
+// POBIERZ GRĘ
 // -----------------------------
-$stmt = $conn->prepare("SELECT * FROM paper_soccer_games WHERE id=?");
+$stmt = $conn->prepare("SELECT * FROM paper_soccer_games WHERE id = ?");
 $stmt->bind_param("i", $game_id);
 $stmt->execute();
 $game = $stmt->get_result()->fetch_assoc();
@@ -31,59 +31,55 @@ if (!$game) {
 // NAZWY GRACZY
 // -----------------------------
 
-// dla zalogowanych — nazwa z users
-function username_from_id($id) {
+function username_from_id($uid) {
     global $conn;
-    if ($id === null || $id == 0) return null;
-
-    $stmt = $conn->prepare("SELECT username FROM users WHERE id=?");
-    $stmt->bind_param("i", $id);
-    $stmt->execute();
-    $row = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    return $row ? $row['username'] : null;
+    $uid = (int)$uid;
+    if ($uid <= 0) return null;
+    $st = $conn->prepare("SELECT username FROM users WHERE id=? LIMIT 1");
+    if (!$st) return null;
+    $st->bind_param("i", $uid);
+    $st->execute();
+    $row = $st->get_result()->fetch_assoc();
+    $st->close();
+    return $row['username'] ?? null;
 }
 
-// docelowo bierzemy nazwę z DB — bo zapisaliśmy ją przy tworzeniu gry
 $player1_name = $game["player1_name"];
-$player2_name = $game["player2_name"];
-
-// jeśli gracz jest zalogowany, ale w DB nazwy nie ma (fallback)
 if (!$player1_name) $player1_name = username_from_id($game["player1_id"]);
-if (!$player2_name) $player2_name = username_from_id($game["player2_id"]);
-
-// ostateczny fallback
 if (!$player1_name) $player1_name = "Gość";
+
+$player2_name = $game["player2_name"];
+if (!$player2_name) $player2_name = username_from_id($game["player2_id"]);
 if (!$player2_name) $player2_name = "Gość";
 
-
-// -----------------------------
-// POBRANIE RUCHÓW GRY
-// -----------------------------
-$moves = [];
-$stmt = $conn->prepare("SELECT * FROM paper_soccer_moves WHERE game_id=? ORDER BY id ASC");
-$stmt->bind_param("i", $game_id);
-$stmt->execute();
-$res = $stmt->get_result();
-
-while ($row = $res->fetch_assoc()) {
-    $moves[] = $row;
+// w trybie bot zawsze pokazujemy BOT jako gracza 2
+if (($game['mode'] ?? '') === 'bot') {
+    $player2_name = 'BOT';
 }
-$stmt->close();
 
 // -----------------------------
-// ZWRACANY JSON
+// used_lines
+// -----------------------------
+$usedLines = json_decode($game["used_lines"] ?? "[]", true);
+if (!is_array($usedLines)) $usedLines = [];
+
+// -----------------------------
+// Odpowiedź
 // -----------------------------
 echo json_encode([
+    "ok" => true,
     "game" => [
-        "status"         => $game["status"],
-        "winner"         => $game["winner"],
-        "current_player" => $game["current_player"],
+        "id" => (int)$game["id"],
+        "code" => $game["code"],
+        "mode" => $game["mode"],
+        "status" => $game["status"],
+        "current_player" => (int)$game["current_player"],
+        "winner" => (int)($game["winner"] ?? 0),
+        "ball_x" => (int)$game["ball_x"],
+        "ball_y" => (int)$game["ball_y"],
+        "used_lines" => $usedLines,
         "player1_name"   => $player1_name,
-        "player2_name"   => $player2_name
-    ],
-    "moves" => $moves
+        "player2_name"   => $player2_name,
+        "bot_difficulty" => isset($game["bot_difficulty"]) ? (int)$game["bot_difficulty"] : null
+    ]
 ]);
-
-exit;

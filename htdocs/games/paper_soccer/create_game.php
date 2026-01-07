@@ -26,7 +26,8 @@ $player1_name = is_logged_in() ? $_SESSION['username'] : $_SESSION['guest_name']
 
 if ($mode === 'bot') {
 
-    $difficulty = (int)($_POST['bot_difficulty'] ?? $_GET['bot_difficulty'] ?? 1);
+    $difficulty_raw = (int)($_POST['bot_difficulty'] ?? $_GET['bot_difficulty'] ?? 1);
+    $difficulty = max(1, min(4, $difficulty_raw));
 
     $stmt = $conn->prepare("
         INSERT INTO paper_soccer_games (
@@ -35,7 +36,7 @@ if ($mode === 'bot') {
             player2_id, player2_name,
             status, current_player
         ) VALUES (
-            ?, 'bot', ?, ?, ?, 0, NULL, 'playing', 1
+            ?, 'bot', ?, ?, ?, 0, 'BOT', 'playing', 1
         )
     ");
 
@@ -61,5 +62,6 @@ $stmt->execute();
 $game_id = $stmt->insert_id;
 $stmt->close();
 
-header("Location: play.php?game_id=" . $game_id);
+// przekieruj do lobby/gry
+header("Location: index.php?game_id=" . $game_id);
 exit;
